@@ -1,0 +1,15 @@
+.DS_Store
+__pycache__/
+*.pyc
+
+artifacts/outputs/
+artifacts/geo_cache/
+artifacts/mapping_cache/
+artifacts/debug_llm_raw/
+artifacts/ledgers/
+artifacts/review_queue/
+artifacts/manual_review/
+artifacts/memory/
+
+.env
+*.log

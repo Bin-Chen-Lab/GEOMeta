@@ -1,0 +1,8 @@
+pandas
+openpyxl
+scikit-learn
+rapidfuzz
+requests
+openai
+pyarrow
+python-docx
