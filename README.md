@@ -4,11 +4,11 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Status](https://img.shields.io/badge/status-active-success)
 
-LLM-guided metadata extraction, normalization, and ontology-aware standardization framework for GEO transcriptomic studies.
+LLM-guided metadata extraction, semantic normalization, and ontology-aware metadata standardization framework for GEO transcriptomic studies.
 
 ---
 
-# Why GEOMeta?
+# Overview
 
 GEO metadata are highly heterogeneous across studies due to inconsistent free-text annotations, incomplete sample descriptions, variable disease terminology, fragmented tissue naming conventions, and inconsistent experimental metadata reporting.
 
@@ -22,9 +22,7 @@ GEOMeta addresses these challenges through a multi-stage metadata harmonization 
 
 The framework is designed for large-scale cross-study transcriptomic integration and downstream biomedical machine learning applications.
 
-The repository includes a small example input file containing a short list of GEO studies for testing the full pipeline from Stage 0. The file contains GSE accessions only; Stage 0 automatically retrieves the corresponding GSE_Info and GSM_Info from GEO.
-
-The current curated release comprises 594,989 GSM samples aggregated from 22,782 unique GSE studies spanning diverse disease, tissue, demographic, and perturbation contexts.
+The current curated release comprises 594,989 GSM samples derived from 22,782 unique GSE studies spanning diverse disease, tissue, demographic, and perturbation contexts.
 
 ---
 
@@ -33,14 +31,16 @@ The current curated release comprises 594,989 GSM samples aggregated from 22,782
 GEOMeta multi-stage metadata harmonization workflow for GEO transcriptomic studies.
 
 <p align="center">
-  <img src="figures/geometa_workflow.png" width="900">
+  <img src="figures/geometa_workflow.png" width="950">
 </p>
 
 ---
 
 # Quick Start
 
-The repository includes a benchmark input file containing 1,000 GEO studies:
+The repository includes a small example input file containing a short list of GEO studies for testing the full pipeline from Stage 0. The file contains GSE accessions only; Stage 0 automatically retrieves the corresponding `GSE_Info` and `GSM_Info` from GEO.
+
+Example input file:
 
 ```text
 input/gse_ids.xlsx
@@ -49,25 +49,9 @@ input/gse_ids.xlsx
 Run the complete pipeline:
 
 ```bash
-PYTHONPATH=. python scripts/run_pipeline.py \
+PYTHONPATH=. python3 scripts/run_pipeline.py \
   --workdir . \
   --gse-file input/gse_ids.xlsx
-```
-
----
-
-# Repository Structure
-
-```text
-scripts/                Pipeline execution scripts
-geo_annotation_agent/   Core pipeline implementation
-Annotation_Prompts/     LLM extraction prompts
-postprocessing/         Stage 2 normalization prompts
-inference/              Derived metadata inference rules
-mappings/               Disease/tissue/compound references
-input/                  Input GSE accession lists
-figures/                Workflow figures and diagrams
-artifacts/              Outputs, caches, ledgers, and review files
 ```
 
 ---
@@ -94,7 +78,7 @@ Python >= 3.10
 Example:
 
 ```bash
-conda create -n geometa python=3.11
+conda create -n geometa python=3.11 -y
 conda activate geometa
 ```
 
@@ -102,18 +86,30 @@ conda activate geometa
 
 ## Install Dependencies
 
+Install the required Python packages from the repository root:
+
 ```bash
 pip install -r requirements.txt
 ```
 
-Core dependencies include:
+---
 
-- pandas
-- openpyxl
-- scikit-learn
-- rapidfuzz
-- requests
-- openai
+## Troubleshooting
+
+If `python` is not found after activating the environment, confirm the active interpreter:
+
+```bash
+which python
+python --version
+```
+
+If needed, recreate the environment:
+
+```bash
+conda create -n geometa python=3.11 -y
+conda activate geometa
+pip install -r requirements.txt
+```
 
 ---
 
@@ -134,6 +130,23 @@ LLM client implementation:
 
 ```text
 geo_annotation_agent/llm_client.py
+```
+
+---
+
+# Repository Structure
+
+```text
+scripts/                Pipeline execution scripts
+geo_annotation_agent/   Core pipeline implementation
+Annotation_Prompts/     LLM extraction prompts
+postprocessing/         Stage 2 normalization prompts
+inference/              Derived metadata inference rules
+mappings/               Disease/tissue/compound references
+input/                  Input GSE accession lists
+figures/                Workflow figures and diagrams
+artifacts/              Outputs, caches, ledgers, and review files
+requirements.txt        Python package dependencies
 ```
 
 ---
@@ -163,12 +176,12 @@ geo_annotation_agent/stage0_retrieve.py
 
 Performs structured metadata extraction using role-specific prompts.
 
-### Extracted Metadata Fields
+### Representative Extracted Metadata Fields
 
 - Disease
 - Tissue
 - Experimental setting
-- Perturbation, Dose, Frequency, Duration
+- Perturbation, dose, frequency, duration
 - RNA library
 - Age
 - Sex
@@ -249,7 +262,7 @@ Chemical perturbations are mapped to:
 - PubChem compounds
 - CID identifiers
 - Canonical SMILES
-- Isomeric SMILES
+- PubChem URLs
 
 ### Key Features
 
@@ -269,6 +282,23 @@ geo_annotation_agent/stage3_map.py
 
 ---
 
+# Example Final Metadata Fields
+
+- Disease
+- Broad_Disease_Category
+- Tissue
+- RNA_Library
+- Experimental_Setting
+- GSE_Pert
+- GSM_Pert
+- Perturbation
+- Pert_Type
+- Age
+- Age_Group
+- Sex
+
+---
+
 # Output Files
 
 Main outputs are written to:
@@ -285,6 +315,7 @@ artifacts/outputs/
 | `*_stage3_mapped.xlsx` | Full ontology-mapped dataset |
 | `*_stage3_mapped_filtered.xlsx` | Filtered mapped dataset |
 | `*_stage3_final_release.xlsx` | Simplified final release dataset |
+| `*_stage3_cp_perturbation_release.xlsx` | Compound perturbation-focused release dataset |
 
 Additional artifacts include:
 
@@ -322,7 +353,7 @@ GEOMeta maintains persistent caches for:
 - LLM normalization mappings
 - Ontology mapping results
 
-This reduces repeated API calls and improves reproducibility across reruns.
+All intermediate outputs, caches, mappings, and review artifacts are retained to support reproducibility and iterative refinement.
 
 ---
 
@@ -356,4 +387,5 @@ MIT License
 - NCBI GEO
 - CTD MEDIC
 - PubChem
+- Human Protein Atlas
 - Azure OpenAI
