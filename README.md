@@ -168,7 +168,7 @@ Performs structured metadata extraction using role-specific prompts.
 - Disease
 - Tissue
 - Experimental setting
-- Perturbation
+- Perturbation, Dose, Frequency, Duration
 - RNA library
 - Age
 - Sex
