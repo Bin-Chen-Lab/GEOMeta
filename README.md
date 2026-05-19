@@ -38,21 +38,17 @@ GEOMeta multi-stage metadata harmonization workflow for GEO transcriptomic studi
 
 # Quick Start
 
-The repository includes a small example input file containing a short list of GEO studies for testing the full pipeline from Stage 0. The file contains GSE accessions only; Stage 0 automatically retrieves the corresponding `GSE_Info` and `GSM_Info` from GEO.
+The repository includes example GEO study lists for testing the full pipeline from Stage 0.
 
-Example input file:
+Supported input formats:
 
 ```text
 input/gse_ids.xlsx
 ```
 
-Run the complete pipeline:
+The input file should contain GEO Series accessions (`GSE_ID`) per row. Stage 0 automatically retrieves the corresponding `GSE_Info` and `GSM_Info` metadata directly from GEO.
 
-```bash
-PYTHONPATH=. python3 scripts/run_pipeline.py \
-  --workdir . \
-  --gse-file input/gse_ids.xlsx
-```
+Runtime depends on the number of GSE studies, GSM samples, and Azure OpenAI response latency.
 
 ---
 
@@ -61,26 +57,27 @@ PYTHONPATH=. python3 scripts/run_pipeline.py \
 ## Clone Repository
 
 ```bash
-git clone https://github.com/<YOUR_USERNAME>/GEOMeta.git
+git clone https://github.com/Bin-Chen-Lab/GEOMeta.git
 cd GEOMeta
 ```
 
----
-
 ## Create Environment
 
-Recommended Python version:
-
-```text
-Python >= 3.10
-```
-
-Example:
+Recommended setup using Conda Forge:
 
 ```bash
-conda create -n geometa python=3.11 -y
+conda create -n geometa -c conda-forge python=3.10 expat pandas openpyxl scikit-learn rapidfuzz requests pyarrow python-docx openai -y
 conda activate geometa
 ```
+
+Verify the environment:
+
+```bash
+which python
+python -c "import xml.parsers.expat, pandas, openpyxl, openai; print('OK')"
+```
+
+The verification command should print `OK`.
 
 ---
 
@@ -94,26 +91,7 @@ pip install -r requirements.txt
 
 ---
 
-## Troubleshooting
-
-If `python` is not found after activating the environment, confirm the active interpreter:
-
-```bash
-which python
-python --version
-```
-
-If needed, recreate the environment:
-
-```bash
-conda create -n geometa python=3.11 -y
-conda activate geometa
-pip install -r requirements.txt
-```
-
----
-
-# Azure OpenAI Configuration
+## Azure OpenAI Configuration
 
 GEOMeta uses Azure OpenAI for metadata annotation and normalization.
 
@@ -122,14 +100,101 @@ Set environment variables:
 ```bash
 export AZURE_OPENAI_API_KEY="YOUR_KEY"
 export AZURE_OPENAI_ENDPOINT="YOUR_ENDPOINT"
-export AZURE_OPENAI_API_VERSION="YOUR_VERSION"
+export AZURE_OPENAI_API_VERSION="2024-12-01-preview"
 export AZURE_OPENAI_DEPLOYMENT="YOUR_DEPLOYMENT"
 ```
 
-LLM client implementation:
+---
+
+# Quick Start
+
+The repository includes a small example input file containing GEO Series accessions for testing the full pipeline from Stage 0. Stage 0 automatically retrieves the corresponding `GSE_Info` and `GSM_Info` from GEO.
+
+Example input file:
 
 ```text
-geo_annotation_agent/llm_client.py
+input/gse_ids.xlsx
+```
+
+Run all commands from the repository root directory after activating the Conda environment.
+
+Run the complete pipeline:
+
+```bash
+PYTHONPATH=. python scripts/run_pipeline.py \
+  --workdir . \
+  --gse-file input/gse_ids.xlsx
+```
+
+---
+
+# Troubleshooting
+
+## Conda environment points to the wrong Python
+
+If the verification command fails, first check which Python is active:
+
+```bash
+which python
+conda info --envs
+```
+
+The active Python should come from the environment you created, for example:
+
+```text
+.../envs/geometa/bin/python
+```
+
+If your machine has multiple Conda installations, activate the environment using the full path to the Conda installation that created it. For example:
+
+```bash
+source /path/to/anaconda3/bin/activate geometa
+```
+
+On some systems, this may look like:
+
+```bash
+source /opt/anaconda3/bin/activate geometa
+```
+
+Then verify again:
+
+```bash
+which python
+python -c "import xml.parsers.expat, pandas, openpyxl, openai; print('OK')"
+```
+
+## Conda XML / openpyxl / pyexpat errors
+
+If you encounter `pyexpat`, `libexpat`, `openpyxl`, or `No module named expat` errors, recreate the environment using Conda Forge:
+
+```bash
+conda deactivate
+conda env remove -n geometa -y
+conda create -n geometa -c conda-forge python=3.10 expat pandas openpyxl scikit-learn rapidfuzz requests pyarrow python-docx openai -y
+conda activate geometa
+```
+
+Then verify:
+
+```bash
+python -c "import xml.parsers.expat, pandas, openpyxl, openai; print('OK')"
+```
+
+These errors usually reflect a local Conda library conflict rather than a GEOMeta issue.
+
+## OpenAI package not found
+
+If `openai` is not found, install it with Conda:
+
+```bash
+conda install -c conda-forge openai -y
+```
+
+Then verify:
+
+```bash
+python -c "import pandas, openai; print('OK')"
 ```
 
 ---
@@ -145,7 +210,7 @@ inference/              Derived metadata inference rules
 mappings/               Disease/tissue/compound references
 input/                  Input GSE accession lists
 figures/                Workflow figures and diagrams
-artifacts/              Outputs, caches, ledgers, and review files
+artifacts/              Generated outputs, caches, ledgers, and review files
 requirements.txt        Python package dependencies
 ```
 
