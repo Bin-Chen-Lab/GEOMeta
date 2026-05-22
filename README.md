@@ -232,7 +232,7 @@ Other models can be used, but annotation quality should be evaluated before prod
 
 ---
 
-## 6. Run GEOMeta
+## 6. Run the full GEOMeta pipeline
 
 Run the following commands from the GEOMeta project folder. Replace `/path/to/GEOMeta` with the location where you cloned or downloaded this repository on your own computer.
 
