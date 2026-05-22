@@ -40,10 +40,20 @@ GEOMeta multi-stage metadata harmonization workflow for GEO transcriptomic studi
 
 ## Clone Repository
 
+First, move to the local folder where you want to download GEOMeta:
+
+```bash
+cd /path/to/your/workspace
+```
+
+Then clone the repository:
+
 ```bash
 git clone https://github.com/Bin-Chen-Lab/GEOMeta.git
 cd GEOMeta
 ```
+
+The git clone command creates a local folder named GEOMeta in the selected workspace. The cd GEOMeta command enters the GEOMeta project folder.
 
 ---
 
@@ -81,15 +91,7 @@ Expected output should be empty after the equals signs.
 
 ## 2. Create a clean conda environment
 
-We recommend using a clean conda environment rather than the base environment.
-
-```bash
-conda deactivate
-conda env remove -n geometa -y
-```
-If an existing `geometa` environment is not present, this command may show a warning; this is fine.
-
-Create the environment using conda-forge only:
+Create a new conda environment using conda-forge only:
 
 ```bash
 conda create -n geometa -c conda-forge --override-channels \
@@ -169,21 +171,7 @@ If both tests pass, the environment is ready.
 
 ---
 
-## 4. Parquet support
-
-GEOMeta writes intermediate outputs as both Excel and Parquet files. Pandas requires a Parquet engine.
-
-This setup uses:
-
-```text
-fastparquet
-```
-
-`fastparquet` is installed during environment creation. No additional Parquet setup is needed.
-
----
-
-## 5. Direct OpenAI API with GPT-5
+## 4. Direct OpenAI API with GPT-5
 
 GEOMeta uses GPT-5 as the recommended default model for metadata annotation, post-processing, and mapping.
 
@@ -200,7 +188,7 @@ Do not save API keys directly in the codebase or commit them to GitHub.
 
 ---
 
-## 6. Other OpenAI-compatible endpoints
+## 5. Other OpenAI-compatible endpoints
 
 GEOMeta can also connect to other OpenAI-compatible endpoints by changing the base URL, API key, and model name.
 
@@ -244,28 +232,13 @@ Other models can be used, but annotation quality should be evaluated before prod
 
 ---
 
-## 7. Run GEOMeta
+## 6. Run GEOMeta
 
-Move to the local GEOMeta project folder.
-
-The project folder is the directory that contains:
-
-```text
-scripts/
-geo_annotation_agent/
-input/
-mappings/
-postprocessing/
-Annotation_Prompts/
-inference/
-```
-
-Use `cd` to enter that folder. For example:
+Run the following commands from the GEOMeta project folder. Replace `/path/to/GEOMeta` with the location where you cloned or downloaded this repository on your own computer.
 
 ```bash
 cd "/path/to/GEOMeta"
 ```
-
 
 Check that you are in the correct folder:
 
@@ -305,7 +278,7 @@ The input file can also be Excel, TSV, or TXT if supported by the runner script.
 
 ---
 
-## 8. Run individual stages
+## 7. Run individual stages
 
 If a previous stage has already completed, downstream stages can be run directly.
 
@@ -331,7 +304,7 @@ Replace `<run_version>` with the actual run version printed by the pipeline.
 
 ---
 
-## 9. Troubleshooting
+## 8. Troubleshooting
 
 ### Error: `No module named expat` or `Symbol not found ... libexpat`
 
@@ -436,7 +409,7 @@ Then rerun the pipeline.
 
 ---
 
-## 10. Repository Structure
+## 9. Repository Structure
 
 ```text
 scripts/                Pipeline execution scripts
@@ -452,7 +425,7 @@ artifacts/              Outputs, caches, ledgers, and review files
 
 ---
 
-## 11. Pipeline Stages
+## 10. Pipeline Stages
 
 ### Stage 0 — GEO Retrieval
 
