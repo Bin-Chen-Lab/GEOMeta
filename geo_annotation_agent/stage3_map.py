@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -43,6 +44,46 @@ def _blank(x) -> str:
 def blank_release_na(df_out: pd.DataFrame) -> pd.DataFrame:
     df_out = df_out.copy()
     return df_out.replace({"NA": "", "Unknown": ""})
+
+
+def normalize_pubchem_cid(x: Any) -> str:
+    """Return PubChem CID as integer-like text, preserving blanks.
+
+    Examples:
+    - 3345.0  -> 3345
+    - 3345.00 -> 3345
+    - 3345    -> 3345
+    - blank/NA/Unknown -> ""
+    """
+    v = _blank(x)
+    if not v:
+        return ""
+
+    v = str(v).strip()
+    v = re.sub(r"^https?://pubchem\.ncbi\.nlm\.nih\.gov/compound/", "", v, flags=re.I)
+    v = v.strip().strip("/")
+
+    if re.fullmatch(r"\d+", v):
+        return v
+
+    try:
+        d = Decimal(v)
+    except (InvalidOperation, ValueError):
+        return v
+
+    if d == d.to_integral_value():
+        return str(int(d))
+    return v
+
+
+def normalize_cid_columns(df_out: pd.DataFrame) -> pd.DataFrame:
+    """Normalize PubChem CID columns without changing non-CID columns."""
+    df_out = df_out.copy()
+    for c in ["CP_CID", "CID"]:
+        if c in df_out.columns:
+            df_out[c] = df_out[c].map(normalize_pubchem_cid)
+    return df_out
+
 
 def _norm(s: str) -> str:
     return str(s).strip().lower() if s is not None else ""
@@ -293,7 +334,7 @@ def load_prior_cp_mapping(path: Path) -> Dict[str, Dict[str, Any]]:
 
         rec = {
             "CP_PubChem_Name": _blank(r.get("Final_Mapped_Compound_Name")),
-            "CP_CID": _blank(r.get("CID")),
+            "CP_CID": normalize_pubchem_cid(r.get("CID")),
             "CP_CanonicalSMILES": _blank(r.get("CanonicalSMILES")),
             "CP_PubChemURL": _blank(r.get("PubChemURL")),
             "CP_MatchType": _blank(r.get("MatchType")),
@@ -385,32 +426,92 @@ def pubchem_cid_from_name(term: str, timeout: int = 20) -> Optional[str]:
         return None
 
     cids = data.get("IdentifierList", {}).get("CID", [])
-    return str(cids[0]) if cids else None
+    return normalize_pubchem_cid(cids[0]) if cids else None
+
+
+def pubchem_cid_from_url(pubchem_url: str) -> str:
+    """Extract a CID from common PubChem compound URLs."""
+    v = _blank(pubchem_url)
+    if not v:
+        return ""
+    m = re.search(r"/compound/(?:cid/)?(\d+)(?:[/?#]|$)", v, flags=re.I)
+    if m:
+        return normalize_pubchem_cid(m.group(1))
+    return ""
+
+
+def _find_pubchem_record_smiles(node: Any) -> str:
+    """Recursively search a PUG-View record JSON object for canonical SMILES."""
+    if isinstance(node, dict):
+        heading = str(node.get("TOCHeading", "")).strip().lower()
+        if "smiles" in heading:
+            info_items = node.get("Information", [])
+            if isinstance(info_items, list):
+                for item in info_items:
+                    value = item.get("Value", {}) if isinstance(item, dict) else {}
+                    strings = value.get("StringWithMarkup") if isinstance(value, dict) else None
+                    if isinstance(strings, list):
+                        for s_item in strings:
+                            text = s_item.get("String", "") if isinstance(s_item, dict) else ""
+                            if text and " " not in text.strip():
+                                return text.strip()
+                    sval = value.get("String") if isinstance(value, dict) else None
+                    if isinstance(sval, str) and sval.strip():
+                        return sval.strip()
+        for value in node.values():
+            hit = _find_pubchem_record_smiles(value)
+            if hit:
+                return hit
+    elif isinstance(node, list):
+        for item in node:
+            hit = _find_pubchem_record_smiles(item)
+            if hit:
+                return hit
+    return ""
+
+
+def pubchem_record_smiles_from_cid(cid: str, timeout: int = 20) -> str:
+    cid = normalize_pubchem_cid(cid)
+    if not cid:
+        return ""
+    url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/{cid}/JSON"
+    data = _request_json(url, timeout=timeout)
+    return _find_pubchem_record_smiles(data) if data else ""
 
 
 def pubchem_title_and_smiles_from_cid(cid: str, timeout: int = 20) -> Dict[str, str]:
+    cid = normalize_pubchem_cid(cid)
+    fallback = {
+        "Title": "",
+        "CanonicalSMILES": "",
+        "PubChemURL": f"https://pubchem.ncbi.nlm.nih.gov/compound/{cid}" if cid else "",
+    }
+
+    if not cid:
+        return fallback
+
     url = (
         "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/"
         f"{cid}/property/Title,CanonicalSMILES/JSON"
     )
     data = _request_json(url, timeout=timeout)
-    fallback = {
-        "Title": "",
-        "CanonicalSMILES": "",
-        "PubChemURL": f"https://pubchem.ncbi.nlm.nih.gov/compound/{cid}",
-    }
 
     if not data:
+        fallback["CanonicalSMILES"] = pubchem_record_smiles_from_cid(cid, timeout=timeout)
         return fallback
 
     try:
         p = data["PropertyTable"]["Properties"][0]
+        smiles = _blank(p.get("CanonicalSMILES"))
+        if not smiles:
+            smiles = pubchem_record_smiles_from_cid(cid, timeout=timeout)
         return {
             "Title": _blank(p.get("Title")),
-            "CanonicalSMILES": _blank(p.get("CanonicalSMILES")),
+            "CanonicalSMILES": smiles,
             "PubChemURL": f"https://pubchem.ncbi.nlm.nih.gov/compound/{cid}",
         }
     except Exception:
+        fallback["CanonicalSMILES"] = pubchem_record_smiles_from_cid(cid, timeout=timeout)
         return fallback
 
 
@@ -467,13 +568,56 @@ def resolve_cp_term_with_pubchem(query_term: str, timeout: int = 20) -> Dict[str
 
     return {
         "CP_PubChem_Name": title if title else query_term,
-        "CP_CID": cid,
+        "CP_CID": normalize_pubchem_cid(cid),
         "CP_CanonicalSMILES": props.get("CanonicalSMILES", ""),
         "CP_PubChemURL": props.get("PubChemURL", ""),
         "CP_MatchType": match_type,
         "CP_Map_Explanation": f"Resolved through PubChem {match_type} lookup.",
         "CP_Map_Method": "pubchem_name_then_synonym",
     }
+
+
+def backfill_cp_smiles_from_existing_ids(df: pd.DataFrame, timeout: int = 20) -> pd.DataFrame:
+    """Backfill missing CP_CanonicalSMILES from existing CP_CID or CP_PubChemURL.
+
+    This function only changes rows that already have compound identifiers/URLs
+    and an empty CP_CanonicalSMILES value. It also normalizes CP_CID to
+    integer-like text before returning.
+    """
+    df = df.copy()
+    for c in ["CP_CID", "CP_CanonicalSMILES", "CP_PubChemURL"]:
+        if c not in df.columns:
+            df[c] = ""
+
+    df["CP_CID"] = df["CP_CID"].map(normalize_pubchem_cid)
+
+    smiles_cache: Dict[str, str] = {}
+    for idx in df.index:
+        current_smiles = _blank(df.at[idx, "CP_CanonicalSMILES"])
+        if current_smiles:
+            continue
+
+        cid = normalize_pubchem_cid(df.at[idx, "CP_CID"])
+        if not cid:
+            cid = pubchem_cid_from_url(df.at[idx, "CP_PubChemURL"])
+            if cid:
+                df.at[idx, "CP_CID"] = cid
+
+        if not cid:
+            continue
+
+        if cid not in smiles_cache:
+            props = pubchem_title_and_smiles_from_cid(cid, timeout=timeout)
+            smiles_cache[cid] = _blank(props.get("CanonicalSMILES"))
+
+        if smiles_cache[cid]:
+            df.at[idx, "CP_CanonicalSMILES"] = smiles_cache[cid]
+            if "CP_Map_Method" in df.columns and not _blank(df.at[idx, "CP_Map_Method"]):
+                df.at[idx, "CP_Map_Method"] = "pubchem_cid_smiles_backfill"
+            if "CP_Map_Explanation" in df.columns and not _blank(df.at[idx, "CP_Map_Explanation"]):
+                df.at[idx, "CP_Map_Explanation"] = "CanonicalSMILES backfilled from existing PubChem CID/URL."
+
+    return df
 
 
 # -------------------------
@@ -1162,7 +1306,13 @@ def run_stage3_mapping(cfg, df_stage2: pd.DataFrame) -> pd.DataFrame:
     # Review / correct
     # -------------------------
     df, review_df = _review_and_correct_stage3(df, prior_tissue, prior_cp)
-     
+
+    # -------------------------
+    # Backfill missing CP_CanonicalSMILES from existing CP_CID or CP_PubChemURL
+    # and normalize CP_CID before final outputs are assembled.
+    # -------------------------
+    df = backfill_cp_smiles_from_existing_ids(df, timeout=int(cfg.pubchem_timeout_sec))
+
     # -------------------------
     # Backfill Broad_Disease_Category using prior disease mapping
     # This is needed when Disease_Mapped was generated by LLM CTD mapping
@@ -1448,7 +1598,8 @@ def run_stage3_mapping(cfg, df_stage2: pd.DataFrame) -> pd.DataFrame:
 
 
     # ============================================================
-    # CP-only perturbation release file with renamed columns
+    # CP perturbation GSE release file with renamed columns
+    # Keep all GSMs from any GSE containing at least one CP sample.
     # ============================================================
 
     cp_release_cols = [
@@ -1487,8 +1638,13 @@ def run_stage3_mapping(cfg, df_stage2: pd.DataFrame) -> pd.DataFrame:
         if c not in df_final.columns:
             df_final[c] = ""
 
-    df_cp_release = df_final.loc[:, cp_release_cols].copy()
-    df_cp_release = df_cp_release[df_cp_release["Pert_Type"].astype(str).str.upper() == "CP"].copy()
+    cp_gse_ids = set(
+        df_final.loc[
+            df_final["Pert_Type"].astype(str).str.upper().eq("CP"),
+            "GSE_ID",
+        ].dropna().astype(str)
+    )
+    df_cp_release = df_final.loc[df_final["GSE_ID"].astype(str).isin(cp_gse_ids), cp_release_cols].copy()
 
     df_cp_release = df_cp_release.rename(
         columns={
@@ -1514,9 +1670,10 @@ def run_stage3_mapping(cfg, df_stage2: pd.DataFrame) -> pd.DataFrame:
         }
     )
 
-    df_release = blank_release_na(df_release)
-    df_simple_release = blank_release_na(df_simple_release)
-    df_cp_release = blank_release_na(df_cp_release)
+    df_final = normalize_cid_columns(df_final)
+    df_release = normalize_cid_columns(blank_release_na(df_release))
+    df_simple_release = normalize_cid_columns(blank_release_na(df_simple_release))
+    df_cp_release = normalize_cid_columns(blank_release_na(df_cp_release))
 
     # Blank selected NA-style fields in the full mapped output
     full_output_blank_cols = [
@@ -1546,7 +1703,7 @@ def run_stage3_mapping(cfg, df_stage2: pd.DataFrame) -> pd.DataFrame:
     print("[SAVED] Stage3 mapped Excel:", out_xlsx)
     print("[SAVED] Stage3 filtered release Excel:", release_xlsx)
     print("[SAVED] Stage3 final simplified release Excel:", simple_release_xlsx)
-    print("[SAVED] Stage3 CP-only perturbation release Excel:", cp_release_xlsx)
+    print("[SAVED] Stage3 CP perturbation GSE release Excel:", cp_release_xlsx)
     print("[SAVED] Stage3 post-mapping review corrections:", review_xlsx)
     print("[SAVED] Stage3 novel terms:", novel_fp)
 
