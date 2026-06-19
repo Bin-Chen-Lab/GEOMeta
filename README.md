@@ -245,6 +245,7 @@ Check that you are in the correct folder:
 ```bash
 ls
 ```
+The `cd` and `ls` commands are a sanity check to confirm that you are inside the correct GEOMeta project folder. These commands do not run the pipeline.
 You should see folders such as `scripts`, `geo_annotation_agent`, `Annotation_Prompts`, `postprocessing`, `inference`, `input`, and `mappings`.
 
 The repository includes an example GSE input file in the `input/` folder:
@@ -266,15 +267,20 @@ Users can replace this file with their own GSE list, while keeping the same colu
 Run the full pipeline:
 
 ```bash
+
 PYTHONPATH=. python scripts/run_pipeline.py \
   --workdir . \
   --gse-file input/gse_ids.csv
+
 ```
 
 The `--workdir .` argument tells GEOMeta to use the current folder as the project working directory.
 
 The input file can also be Excel, TSV, or TXT if supported by the runner script. CSV is recommended because it is simple and avoids Excel parser issues during input loading.
 
+Runtime note: 
+The pipeline will print progress by stage. Stage 0 usually finishes quickly, while Stage 1 may take longer because it performs model-based sample annotation. Runtime increases with the number of GSEs, number of GSM samples, and amount of metadata per study.
+If the terminal shows `========== Stage 1 ==========` and no error message, the pipeline is likely still running. Using `python -u` is recommended so that progress messages are printed continuously.
 
 ---
 
