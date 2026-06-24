@@ -245,6 +245,8 @@ Check that you are in the correct folder:
 ```bash
 ls
 ```
+The cd and ls commands are a sanity check to confirm that you are inside the correct GEOMeta project folder. These commands do not run the pipeline.
+
 You should see folders such as `scripts`, `geo_annotation_agent`, `Annotation_Prompts`, `postprocessing`, `inference`, `input`, and `mappings`.
 
 The repository includes an example GSE input file in the `input/` folder:
@@ -273,6 +275,8 @@ PYTHONPATH=. python scripts/run_pipeline.py \
 
 The `--workdir .` argument tells GEOMeta to use the current folder as the project working directory.
 
+The pipeline prints progress by stage. Stage 0 usually finishes quickly because it retrieves and prepares GEO metadata. Stage 1 may take longer because it performs model-based sample annotation. Runtime increases with the number of GSEs, the number of GSM samples, and the amount of metadata per study.
+
 The input file can also be Excel, TSV, or TXT if supported by the runner script. CSV is recommended because it is simple and avoids Excel parser issues during input loading.
 
 
@@ -280,9 +284,10 @@ The input file can also be Excel, TSV, or TXT if supported by the runner script.
 
 ## 7. Run individual stages
 
-If a previous stage has already completed, downstream stages can be run directly.
+The full pipeline command above is recommended for most users. Individual stage scripts are mainly useful when an earlier stage has already completed and you want to rerun only the downstream stages without repeating the full workflow.
 
 ### Stage 2 from saved Stage 1 output
+For example, if Stage 1 has already completed, Stage 2 can be run directly from the saved Stage 1 output:
 
 ```bash
 PYTHONPATH=. python scripts/run_stage2.py \
@@ -292,6 +297,7 @@ PYTHONPATH=. python scripts/run_stage2.py \
 ```
 
 ### Stage 3 from saved Stage 2 output
+If Stage 2 has already completed, Stage 3 can be run directly from the saved Stage 2 output:
 
 ```bash
 PYTHONPATH=. python scripts/run_stage3.py \
@@ -300,7 +306,11 @@ PYTHONPATH=. python scripts/run_stage3.py \
   --run-version <run_version>
 ```
 
-Replace `<run_version>` with the actual run version printed by the pipeline.
+Replace <run_version> with the actual run version printed by the pipeline, for example:
+
+geometa_full_20260619_153452
+
+The exact output file names are also printed in the terminal during each pipeline run. When rerunning an individual stage, use the corresponding saved file from artifacts/outputs/.
 
 ---
 
