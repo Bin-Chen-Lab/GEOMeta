@@ -21,16 +21,26 @@ Examples:
 - Yes: A study where mice are treated with a drug to observe gene expression changes.
 - No: A study analyzing gene expression in healthy human tissues without any treatments.
 
-14. GSM_Pert: It specifies whether an individual GSM sample is a 'Perturbed' sample or a 'Control' sample within the GSE. Examine the GSM Information to determine the sample's status. Look for indications of treatments, interventions, or genetic manipulations in the GSM information. If the sample is untreated or received a placebo/control substance or served as baseline or control then annotate as 'Control'. If the sample received any form of Perturbation, annotate as 'Perturbed'.
+14. GSM_Pert: It specifies whether an individual GSM sample is a 'Perturbed' sample or a 'Control' sample within the GSE. Examine the GSM Information to determine the sample's status. Look for indications of treatments, interventions, or genetic manipulations in the GSM information. If the sample is untreated or received a placebo/control substance or served as baseline or control then annotate as 'Control'. If the sample received any form of Perturbation, annotate as 'Perturbed'. 
 Examples:
 - Perturbed: A cell line treated with a chemotherapeutic agent.
 - Control: A cell line treated with vehicle only (e.g., DMSO) or left untreated.
+
+Do not classify disease status, diagnosis, genotype, sex, age, tissue type, or naturally occurring clinical condition as a perturbation unless the metadata explicitly states that an experimental intervention was applied. In observational case/control disease studies with no treatment, exposure, genetic manipulation, induced injury, or other deliberate intervention, annotate GSE_Pert as 'No' and annotate GSM_Pert as 'Control' for all samples.
+
+For longitudinal treatment studies that include both baseline/pre-treatment and post-treatment samples, classify each GSM individually using GSM-level title, characteristics, and sample-specific treatment fields. If the GSM is explicitly labelled as 'Baseline', 'pre-treatment', 'before treatment', 'untreated', 'placebo', 'vehicle', or 'control', annotate GSM_Pert as 'Control'. If the GSM contains a treatment agent together with a post-treatment timepoint or treated condition, such as '2 weeks drug', '8 weeks drug', 'after treatment', 'post-treatment', or 'treated with [drug]', annotate GSM_Pert as 'Perturbed'. Do not assign all samples in a longitudinal treatment GSE to the same GSM_Pert value.
+
+Internal consistency rule: If GSE_Pert is 'No', then GSM_Pert must not be 'Perturbed'. A GSM sample can be 'Perturbed' only when the GSE contains at least one deliberate perturbation. If a sample appears diseased but no experimental intervention is described, do not mark it as 'Perturbed'.
 
 15. Pert: Extract information from the GSM record about the treatments or interventions.
 - For Perturbed Samples: List the specific Perturbations applied. Use precise terms, including drug names, genetic modifications, or environmental changes.
 - For Control Samples: Indicate the control substance or condition (e.g., 'DMSO', 'Vehicle Control', 'Untreated'). Sometimes GSM_Info only mentions ‘Control’ or ‘Vehicle’ but GSE_Info includes specific details about control samples so carefully review and extract the Perturbations.
 - List multiple Perturbations separated by ' + '. Use exact names of drugs or agents, and avoid abbreviations unless they are standard and unambiguous.
 For genetic Perturbations, specify the gene and type of modification (e.g., 'Knockout: PTEN').
+
+For baseline or pre-treatment control samples in longitudinal studies, use the GSM-specific control condition as Pert, such as 'Baseline', 'Untreated', 'Vehicle', 'DMSO', or 'Placebo'. Do not copy the GSE-level treatment drug into Pert for baseline/control samples unless the GSM itself explicitly reports that drug as the control substance.
+
+If a GSE-level protocol mentions a drug generally, but the individual GSM is labelled as 'Baseline' or 'pre-treatment', annotate the sample as Control and do not assign the study drug as the sample-level Pert.
 
 16. Pert_Dose: It specifies the dose of the Perturbation applied to the sample. Provide the dose amount along with appropriate units (e.g., '20 mg/kg', '10 μM') to maintain clarity. Exclude Perturbation names from this field and use 'NA' for unspecified dosages. 
 Examples:
