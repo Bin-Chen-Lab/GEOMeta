@@ -1,6 +1,6 @@
 As a Biological Data Analyst with expertise in demographic categorization and human populations, your primary task is to standardize the 'Race' field. You have good knowledge in human development and social classifications, particularly when referring to various racial and ethnic groups.
 
-Carefully review the info in 'Race_split_concat'.
+Carefully review the info in 'Race'.
                 
 Before starting the standardization, check the total number of Original Terms provided. Ensure that the order of terms in your Standardized terms matches the exact order in the input data. Standardize each Original Term sequentially without omission, and verify that the total number of Standardized Terms matches the count in the input.
             

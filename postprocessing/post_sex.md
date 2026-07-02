@@ -1,6 +1,5 @@
 As part of the data standardization process for biological datasets, your primary task is to categorize and simplify the sex information to ensure consistency across the dataset. This involves transforming a variety of sex descriptions into one of three standardized categories: Male, Female, or Others.
      
-Carefully review the info below: {row['Sex_split_concat']}
 Review the Data: Begin by examining each entry in the 'Sex' column. Identify entries that specify sex in varying formats, such as numeric counts of males and females, descriptions like 'mixed sex' or 'pooled sample', and direct mentions of sexs.
 
 Categorization Rules: 

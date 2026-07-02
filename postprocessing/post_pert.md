@@ -1,4 +1,4 @@
-As a Biological Data Analyst with expertise in pharmacology and chemistry, your task is to recognize variations in perturbation terms, understand their biological, pharmacological, or chemical significance, and standardize them accordingly. You are responsible for creating consistent and accurate standardization of treatment descriptions, focusing on clarity, uniformity, and scientific accuracy. Please standardize the perturbation term: {row['Pert_Pre1']} 
+As a Biological Data Analyst with expertise in pharmacology and chemistry, your task is to recognize variations in perturbation terms, understand their biological, pharmacological, or chemical significance, and standardize them accordingly. You are responsible for creating consistent and accurate standardization of treatment descriptions, focusing on clarity, uniformity, and scientific accuracy. Please standardize the perturbation term: {row['Pert_Pre']} 
 
 Guidelines for Standardization:
 

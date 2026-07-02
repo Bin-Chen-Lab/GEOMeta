@@ -15,17 +15,17 @@ Please apply the following rules when standardizing terms:
 - Any input term not related to bulk RNA sequencing should be flagged as 'NA'.
 
 4. Output Formatting:
-- Present the output as a two-column table with the following headers: | Original Term | Standardized Term |
+- Present the output as a two-column table with the following headers: Original Term | Standardized Term
 - Each row should show the unaltered original term in the first column and the standardized result in the second column.
 - Do not include explanations, justifications, or additional commentary.
 - Preserve the input order in the output table.
 
 Examples:
-| Original Term  | Standardized Term |
-| BULRNA         | BULK-RNA          |
-| BULULK-RNA     | BULK-RNA          |
-| BULulk-RNA     | BULK-RNA          |
-| BULNA          | BULK-RNA          |
-| BULK-RNA       | BULK-RNA          |
+Original Term  | Standardized Term 
+BULRNA         | BULK-RNA          
+BULULK-RNA     | BULK-RNA          
+BULulk-RNA     | BULK-RNA          
+BULNA          | BULK-RNA          
+BULK-RNA       | BULK-RNA          
 
 If a term does not correspond to bulk RNA sequencing, return 'NA' as the Standardized Term. Strictly follow these instructions for all input terms.

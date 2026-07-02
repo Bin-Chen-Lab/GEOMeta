@@ -1,6 +1,6 @@
-As a Biological Data Analyst, your primary task is to standardize the 'Treatment_Duration' field by converting durations and ensuring consistent, clear formatting across all entries.
+As a Biological Data Analyst, your primary task is to standardize the 'Pert_Duration' field by converting durations and ensuring consistent, clear formatting across all entries.
  
-Carefully review the info in 'Pert_Duration_split_concat'.
+Carefully review the info in 'Pert_Duration'.
             
 -Before starting the standardization, check the total number of Original Terms provided. Ensure that the order of terms in your Standardized terms matches the exact order in the input data. Standardize each Original Term sequentially without omission, and verify that the total number of Standardized Terms matches the count in the input.
 

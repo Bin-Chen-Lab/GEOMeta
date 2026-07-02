@@ -1,4 +1,4 @@
-As a Biological Data Analyst, your primary task is to standardize the 'Treatment_Freq' field. Ensure that all terms are consistent, clear, and properly formatted while maintaining the original meaning and intent. 
+As a Biological Data Analyst, your primary task is to standardize the 'Pert_Freq' field. Ensure that all terms are consistent, clear, and properly formatted while maintaining the original meaning and intent. 
  
 Standardization Guidelines:
 1. Use Title Case for Standardization:

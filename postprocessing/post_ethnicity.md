@@ -4,7 +4,8 @@ As a Biological Data Analyst with expertise in demographic classification and so
 • Work term-by-term, preserving the original order and count.  
 • Produce a tab-separated table with three headers:
 
-Original Term	Standardized Term	Broad_Category                
+Original Term	Standardized Term	Broad_Category   
+             
 Detailed Instructions for Improving Revised Terms:
             
 2. Rules for the ‘Standardized Term’:
