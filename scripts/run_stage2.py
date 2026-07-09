@@ -93,13 +93,12 @@ def main():
     else:
         df_stage2_pass1 = run_stage2_postprocessing(cfg, df_stage1)
 
-        out_xlsx = Path(cfg.outputs_dir) / f"{cfg.run_version}_stage2_pass1.xlsx"
-        out_parq = Path(cfg.outputs_dir) / f"{cfg.run_version}_stage2_pass1.parquet"
-        df_stage2_pass1.to_excel(out_xlsx, index=False)
-        df_stage2_pass1.to_parquet(out_parq, index=False)
 
-        print("[SAVED] Stage2 pass1 Excel:", out_xlsx)
-        print("[SAVED] Stage2 pass1 Parquet:", out_parq)
+        out_xlsx = Path(cfg.outputs_dir) / f"{cfg.run_version}_stage2_post.xlsx"
+        out_parq = Path(cfg.outputs_dir) / f"{cfg.run_version}_stage2_post.parquet"
+
+        print("[INFO] Stage2 pass1 Excel:", out_xlsx)
+        print("[INFO] Stage2 pass1 Parquet:", out_parq)
 
     if "GSM_ID" not in df_stage2_pass1.columns or "GSE_ID" not in df_stage2_pass1.columns:
         raise ValueError("Stage2 pass1 output is missing required columns GSM_ID/GSE_ID.")

@@ -10,7 +10,7 @@ PYTHONPATH=. python scripts/run_stage1_qa3_evidence_verifier.py \
   --stage1-qa1-report artifacts/outputs/RUN_stage1_qa1_consistency_report.xlsx \
   --stage1-qa2-report artifacts/outputs/RUN_stage1_qa2_cross_agent_validation_report.xlsx \
   --run-version RUN \
-  --max-tasks 150
+  --stage1-qa3-mode smart
 
 Build tasks only, without LLM calls:
 
@@ -57,7 +57,15 @@ def main() -> None:
     parser.add_argument("--output-dir", default=None, help="Output directory. Defaults to <workdir>/artifacts/outputs")
     parser.add_argument("--gse-col", default="GSE_ID")
     parser.add_argument("--gsm-col", default="GSM_ID")
-    parser.add_argument("--max-tasks", type=int, default=150)
+    parser.add_argument("--max-tasks", type=int, default=None)
+    parser.add_argument(
+        "--stage1-qa3-mode",
+        "--qa3-mode",
+        dest="stage1_qa3_mode",
+        choices=["off", "smart", "full"],
+        default="smart",
+        help="QA3 mode: off skips QA3 tasks, smart runs prioritized tasks, full runs broad QA3.",
+    )
     parser.add_argument("--min-confidence-to-apply", type=float, default=0.90)
     parser.add_argument("--build-tasks-only", action="store_true")
     parser.add_argument("--no-apply", action="store_true", help="Save LLM recommendations but do not apply corrections")
@@ -81,15 +89,27 @@ def main() -> None:
 
     df_stage1 = read_table(stage1_path)
 
+    qa3_mode = args.stage1_qa3_mode
+
+    if args.max_tasks is not None:
+        qa3_max_tasks = args.max_tasks
+    elif qa3_mode == "full":
+        qa3_max_tasks = 150
+    elif qa3_mode == "off":
+        qa3_max_tasks = 0
+    else:
+        qa3_max_tasks = 50
+
     cfg = EvidenceVerifierConfig(
         gse_col=args.gse_col,
         gsm_col=args.gsm_col,
-        max_tasks=args.max_tasks,
+        qa3_mode=qa3_mode,
+        max_tasks=qa3_max_tasks,
         min_confidence_to_apply=args.min_confidence_to_apply,
         build_tasks_only=args.build_tasks_only,
         apply_accepted=not args.no_apply,
         allow_nonempty_overwrite=args.allow_nonempty_overwrite,
-        include_sampling_qc=not args.skip_sampling_qc,
+        include_sampling_qc=(qa3_mode == "full") and not args.skip_sampling_qc,
         include_stage1_qa2_low=args.include_stage1_qa2_low,
     )
 

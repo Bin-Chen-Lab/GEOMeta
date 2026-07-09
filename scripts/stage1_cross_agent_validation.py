@@ -529,13 +529,122 @@ def validate_organism_strain(row: pd.Series, w: IssueWriter) -> None:
             "Organism is Homo sapiens but Strain contains a value.",
         )
 
+def validate_controlled_vocabularies(row: pd.Series, w: IssueWriter) -> None:
+    controlled = {
+        "Seq_Type": {"BULK-RNA", "SC-RNA", "Other", "NA"},
+        "GSE_Pert": {"Yes", "No", "NA"},
+        "GSM_Pert": {"Perturbed", "Control", "NA"},
+        "Sex": {"Male", "Female", "Mixed", "NA"},
+        "Experimental_Setting": {"In Vivo", "In Vitro", "Ex Vivo", "Clinical", "Other", "NA"},
+    }
+
+    for field, allowed in controlled.items():
+        if field not in row.index:
+            continue
+
+        value = get(row, field)
+        if is_na_like(value):
+            continue
+
+        if value not in allowed:
+            w.add(
+                row,
+                f"R090_{field}",
+                f"{field} contains non-controlled value",
+                "Medium",
+                "Controlled vocabulary violation",
+                [field],
+                f"Normalize {field} to one of: {', '.join(sorted(allowed))}.",
+                f"{field} value is not in the controlled vocabulary: {value}",
+                needs_llm_review=False,
+                needs_human_review=True,
+                suggested_field=field,
+                suggested_value="",
+            )
+            
+def validate_cell_line_sex_safeguard(row: pd.Series, w: IssueWriter) -> None:
+    sample_type = get(row, "SampleType")
+    specimen = get(row, "Specimen_Type")
+    rna_source = get(row, "RNA_Source")
+    tissue = get(row, "Tissue")
+    sex = get(row, "Sex")
+
+    is_cell_line = (
+        in_set(sample_type, {"Cell Line"})
+        or in_set(specimen, {"Cell Line"})
+        or has_any(rna_source, ["cell line:"])
+    )
+
+    if not is_cell_line:
+        return
+
+    if is_na_like(sex):
+        return
+
+    source_text = f"{tissue} {rna_source}"
+
+    tissue_sex_specific = has_any(source_text, FEMALE_TISSUES) or has_any(source_text, MALE_TISSUES)
+
+    if tissue_sex_specific:
+        w.add(
+            row,
+            "R091",
+            "Cell line Sex may have been inferred from tissue/source",
+            "High",
+            "Cell-line safeguard",
+            ["SampleType", "Specimen_Type", "RNA_Source", "Tissue", "Sex"],
+            "Review Sex. For cell lines, do not infer Sex from tissue such as ovary, uterus, prostate, or testis unless donor sex is explicitly provided.",
+            "Cell-line sample has non-NA Sex and sex-specific tissue/source terms; this may reflect unsafe tissue-based inference.",
+            needs_llm_review=True,
+            needs_human_review=True,
+            suggested_field="Sex",
+            suggested_value="NA",
+        )        
+
+def validate_control_perturbation_detail_consistency(row: pd.Series, w: IssueWriter) -> None:
+    gsm_pert = get(row, "GSM_Pert")
+    pert = get(row, "Pert")
+    dose = get(row, "Pert_Dose")
+    freq = get(row, "Pert_Freq")
+    duration = get(row, "Pert_Duration")
+    route = get(row, "Route_Admin")
+
+    if not eq(gsm_pert, "Control"):
+        return
+
+    detail_fields = {
+        "Pert": pert,
+        "Pert_Dose": dose,
+        "Pert_Freq": freq,
+        "Pert_Duration": duration,
+        "Route_Admin": route,
+    }
+
+    nonempty_details = [field for field, value in detail_fields.items() if not is_na_like(value)]
+
+    if nonempty_details:
+        w.add(
+            row,
+            "R092",
+            "Control sample contains perturbation detail fields",
+            "Medium",
+            "Perturbation consistency issue",
+            ["GSM_Pert", "Pert", "Pert_Dose", "Pert_Freq", "Pert_Duration", "Route_Admin"],
+            "Review whether this sample is truly Control or whether perturbation detail fields should be NA.",
+            f"GSM_Pert is Control, but these perturbation detail fields are non-NA: {', '.join(nonempty_details)}.",
+            needs_llm_review=True,
+            needs_human_review=False,
+        )
 
 RULES: List[Callable[[pd.Series, IssueWriter], None]] = [
+    validate_controlled_vocabularies,
     validate_seq_type_rna_library,
     validate_rna_source_tissue_sampletype,
     validate_experimental_setting_model,
     validate_perturbation_internal,
+    validate_control_perturbation_detail_consistency,
     validate_demographics,
+    validate_cell_line_sex_safeguard,
     validate_disease_tissue,
     validate_organism_strain,
 ]

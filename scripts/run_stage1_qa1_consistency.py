@@ -49,6 +49,12 @@ def main() -> None:
     output_dir = Path(args.output_dir).resolve() if args.output_dir else workdir / "artifacts" / "outputs"
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    print("[Stage1 QA1] Running deterministic within-GSE consistency audit.")
+    print("[Stage1 QA1] Safe high-confidence corrections may be applied automatically.")
+    print("[Stage1 QA1] Ambiguous or mixed-design cases are written to the review queue.")
+    print(f"[Stage1 QA1] Input: {Path(args.stage1).resolve()}")
+    print(f"[Stage1 QA1] Output directory: {output_dir}")
+
     script_dir = Path(__file__).resolve().parent
     audit_script = script_dir / "within_gse_consistency_audit.py"
     llm_script = script_dir / "llm_gse_review_agent.py"

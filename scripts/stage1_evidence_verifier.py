@@ -168,6 +168,30 @@ DESIGN_FIELDS = [
 ]
 
 
+QA3_VALID_MODES = {"off", "smart", "full"}
+
+QA3_SMART_HIGH_VALUE_FIELDS = {
+    "Disease",
+    "Tissue",
+    "RNA_Source",
+    "GSE_Pert",
+    "GSM_Pert",
+    "Pert",
+    "SampleType",
+    "Specimen_Type",
+}
+
+QA3_SMART_LOW_YIELD_FIELDS = {
+    "RNA_Library",
+    "Pert_Dose",
+    "Pert_Freq",
+    "Pert_Duration",
+    "Route_Admin",
+}
+
+QA3_SMART_DEFAULT_MAX_TASKS = 50
+QA3_FULL_DEFAULT_MAX_TASKS = 150
+
 # -----------------------------------------------------------------------------
 # Config
 # -----------------------------------------------------------------------------
@@ -176,7 +200,8 @@ DESIGN_FIELDS = [
 class EvidenceVerifierConfig:
     gse_col: str = "GSE_ID"
     gsm_col: str = "GSM_ID"
-    max_tasks: int = 150
+    qa3_mode: str = "smart"
+    max_tasks: Optional[int] = None
     max_gse_info_chars: int = 5000
     max_gsm_info_chars: int = 2500
     max_same_gse_examples: int = 40
@@ -591,6 +616,130 @@ def build_sampling_qc_tasks(
 
     return tasks
 
+def _qa3_mode_normalized(mode: Any) -> str:
+    mode = clean_value(mode).lower()
+    return mode if mode in QA3_VALID_MODES else "smart"
+
+
+def _qa3_default_max_tasks_for_mode(mode: str) -> int:
+    mode = _qa3_mode_normalized(mode)
+    if mode == "full":
+        return QA3_FULL_DEFAULT_MAX_TASKS
+    if mode == "off":
+        return 0
+    return QA3_SMART_DEFAULT_MAX_TASKS
+
+
+def _qa3_task_priority_score(row: pd.Series) -> int:
+    """
+    Higher score = more valuable QA3 LLM task.
+
+    Smart mode should spend LLM calls on issues that are likely to improve
+    final biological/release quality.
+    """
+    field = clean_value(row.get("Target_Field", ""))
+    task_type = clean_value(row.get("Task_Type", ""))
+    severity = clean_value(row.get("Severity", ""))
+
+    score = 0
+
+    if severity == "High":
+        score += 40
+    elif severity == "Medium":
+        score += 20
+    elif severity == "Low":
+        score += 5
+
+    field_weights = {
+        "Disease": 100,
+        "Tissue": 85,
+        "RNA_Source": 70,
+        "GSE_Pert": 70,
+        "GSM_Pert": 70,
+        "Pert": 65,
+        "SampleType": 60,
+        "Specimen_Type": 60,
+        "Seq_Type": 50,
+        "Organism": 45,
+        "Experimental_Setting": 45,
+        "Model_Type": 45,
+        "RNA_Library": 15,
+        "Pert_Dose": 10,
+        "Pert_Freq": 10,
+        "Pert_Duration": 10,
+        "Route_Admin": 10,
+    }
+    score += field_weights.get(field, 0)
+
+    task_weights = {
+        "partial_missing_targeted_rescue": 45,
+        "mixed_design_or_case_control_review": 45,
+        "cross_agent_conflict_verification": 35,
+        "within_gse_conflict_review": 30,
+        "whole_gse_missing_field": 20,
+        "evidence_support_sampling_qc": -20,
+    }
+    score += task_weights.get(task_type, 0)
+
+    # Whole-GSE RNA_Library and treatment detail missingness are usually low yield
+    # unless explicit evidence is already present. Do not spend routine QA3 budget there.
+    if field in QA3_SMART_LOW_YIELD_FIELDS:
+        score -= 70
+
+    if field == "RNA_Library" and task_type == "whole_gse_missing_field":
+        score -= 40
+
+    return int(score)
+
+
+def apply_qa3_mode_policy(tasks_df: pd.DataFrame, cfg: EvidenceVerifierConfig) -> pd.DataFrame:
+    """
+    Apply off/smart/full task-selection policy before LLM calls.
+
+    off   = no QA3 LLM tasks.
+    smart = prioritized high-value tasks only.
+    full  = broad QA3 task list, capped by max_tasks.
+    """
+    mode = _qa3_mode_normalized(cfg.qa3_mode)
+
+    if tasks_df is None or tasks_df.empty:
+        return pd.DataFrame(columns=[] if tasks_df is None else tasks_df.columns)
+
+    tasks_df = tasks_df.copy()
+
+    if mode == "off":
+        return tasks_df.head(0).copy()
+
+    max_tasks = cfg.max_tasks
+    if max_tasks is None:
+        max_tasks = _qa3_default_max_tasks_for_mode(mode)
+
+    if mode == "smart":
+        tasks_df["_QA3_Smart_Score"] = tasks_df.apply(_qa3_task_priority_score, axis=1)
+
+        # Keep high-value candidates. This threshold keeps Disease/Tissue/Perturbation
+        # issues and drops most low-yield missing dose/duration/frequency/route tasks.
+        tasks_df = tasks_df.loc[tasks_df["_QA3_Smart_Score"] >= 50].copy()
+
+        tasks_df = tasks_df.sort_values(
+            ["_QA3_Smart_Score", "Severity", "GSE_ID", "GSM_ID", "Target_Field"],
+            ascending=[False, True, True, True, True],
+            kind="stable",
+        )
+
+        tasks_df = tasks_df.drop(columns=["_QA3_Smart_Score"])
+
+    # full mode uses the existing ordered task list.
+    if max_tasks is not None:
+        max_tasks = int(max_tasks)
+
+        if max_tasks <= 0:
+            return tasks_df.head(0).copy()
+
+        tasks_df = tasks_df.head(max_tasks).reset_index(drop=True)
+
+    tasks_df["Task_ID"] = [f"EV{i + 1:07d}" for i in range(tasks_df.shape[0])]
+    return tasks_df
 
 def build_verification_tasks(
     df_stage1: pd.DataFrame,
@@ -627,10 +776,12 @@ def build_verification_tasks(
         ])
 
     tasks_df["_sort"] = tasks_df["Task_Type"].map(priority).fillna(99)
-    tasks_df = tasks_df.sort_values(["_sort", "Severity", "GSE_ID", "GSM_ID", "Target_Field"], kind="stable").drop(columns=["_sort"])
-    if cfg.max_tasks is not None and cfg.max_tasks > 0:
-        tasks_df = tasks_df.head(cfg.max_tasks).reset_index(drop=True)
-        tasks_df["Task_ID"] = [f"EV{i + 1:07d}" for i in range(tasks_df.shape[0])]
+    tasks_df = tasks_df.sort_values(
+        ["_sort", "Severity", "GSE_ID", "GSM_ID", "Target_Field"],
+        kind="stable",
+    ).drop(columns=["_sort"])
+
+    tasks_df = apply_qa3_mode_policy(tasks_df, cfg)
     return tasks_df
 
 
@@ -1063,6 +1214,50 @@ def apply_stage1_qa3_recommendations(
 # Main pipeline callable
 # -----------------------------------------------------------------------------
 
+def _qa3_print_progress(
+    *,
+    done_tasks: int,
+    total_tasks: int,
+    recommendations: List[Dict[str, Any]],
+    start_time: float,
+) -> None:
+    elapsed = time.perf_counter() - start_time
+    pct = (done_tasks / total_tasks * 100.0) if total_tasks else 100.0
+    avg = elapsed / done_tasks if done_tasks else 0.0
+    eta = avg * max(total_tasks - done_tasks, 0)
+
+    def fmt(seconds: float) -> str:
+        seconds = max(float(seconds), 0.0)
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        s = int(seconds % 60)
+        return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:d}:{s:02d}"
+
+    accepted_like = 0
+    human_like = 0
+    no_change_like = 0
+
+    for r in recommendations:
+        decision = clean_value(r.get("Decision", ""))
+        if decision in {"Fill All", "Fill Subset", "Correct Field"}:
+            accepted_like += 1
+        elif decision == "Do Not Change":
+            no_change_like += 1
+        else:
+            human_like += 1
+
+    print(
+        "[Stage1 QA3 progress] "
+        f"tasks={done_tasks:,}/{total_tasks:,} ({pct:.1f}%); "
+        f"accepted_like={accepted_like:,}; "
+        f"human_review_like={human_like:,}; "
+        f"no_change={no_change_like:,}; "
+        f"elapsed={fmt(elapsed)}; "
+        f"avg={avg:.1f}s/task; "
+        f"ETA={fmt(eta)}",
+        flush=True,
+    )
+
 def run_stage1_qa3_verification_pipeline(
     df_stage1: pd.DataFrame,
     stage1_qa1_report: Optional[Path],
@@ -1098,6 +1293,18 @@ def run_stage1_qa3_verification_pipeline(
             human_df["Apply_Reason"] = "Stage1 QA3 was run in build-tasks-only mode."
     else:
         client, model = make_openai_client_from_env_or_cfg(cfg_pipeline)
+        qa3_progress_start = time.perf_counter()
+        total_tasks = int(tasks_df.shape[0])
+
+        print(
+            "[Stage1 QA3] Starting evidence-grounded LLM verification "
+            f"for {total_tasks:,} task(s); mode={_qa3_mode_normalized(cfg.qa3_mode)}; "
+            f"min_confidence_to_apply={cfg.min_confidence_to_apply:.2f}; "
+            f"apply_accepted={cfg.apply_accepted}; "
+            f"allow_nonempty_overwrite={cfg.allow_nonempty_overwrite}.",
+            flush=True,
+        )
+
         for idx, (_, task_row) in enumerate(tasks_df.iterrows(), start=1):
             task = {k: clean_value(v) for k, v in task_row.to_dict().items()}
             packet = build_evidence_packet(df_stage1, task, cfg)
@@ -1129,6 +1336,13 @@ def run_stage1_qa3_verification_pipeline(
             recommendations.append(out_row)
             if cfg.sleep_between_calls:
                 time.sleep(float(cfg.sleep_between_calls))
+
+            _qa3_print_progress(
+                done_tasks=idx,
+                total_tasks=total_tasks,
+                recommendations=recommendations,
+                start_time=qa3_progress_start,
+            )
 
         rec_df = pd.DataFrame(recommendations)
         # Apply only if enabled. Otherwise, keep recommendations as review-only.
@@ -1225,7 +1439,15 @@ def main() -> None:
     parser.add_argument("--run-version", required=True, help="Run version prefix")
     parser.add_argument("--gse-col", default="GSE_ID")
     parser.add_argument("--gsm-col", default="GSM_ID")
-    parser.add_argument("--max-tasks", type=int, default=150)
+    parser.add_argument("--max-tasks", type=int, default=None)
+    parser.add_argument(
+        "--stage1-qa3-mode",
+        "--qa3-mode",
+        dest="stage1_qa3_mode",
+        choices=["off", "smart", "full"],
+        default="smart",
+        help="QA3 mode: off skips QA3 tasks, smart runs prioritized tasks, full runs broad QA3.",
+    )
     parser.add_argument("--min-confidence-to-apply", type=float, default=0.90)
     parser.add_argument("--build-tasks-only", action="store_true")
     parser.add_argument("--no-apply", action="store_true", help="Do not apply accepted recommendations; still save recommendations")
@@ -1240,15 +1462,28 @@ def main() -> None:
     args = parser.parse_args()
 
     df_stage1 = read_table(Path(args.stage1))
+
+    qa3_mode = args.stage1_qa3_mode
+
+    if args.max_tasks is not None:
+        qa3_max_tasks = args.max_tasks
+    elif qa3_mode == "full":
+        qa3_max_tasks = 150
+    elif qa3_mode == "off":
+        qa3_max_tasks = 0
+    else:
+        qa3_max_tasks = 50
+
     cfg = EvidenceVerifierConfig(
         gse_col=args.gse_col,
         gsm_col=args.gsm_col,
-        max_tasks=args.max_tasks,
+        qa3_mode=qa3_mode,
+        max_tasks=qa3_max_tasks,
         min_confidence_to_apply=args.min_confidence_to_apply,
         build_tasks_only=args.build_tasks_only,
         apply_accepted=not args.no_apply,
         allow_nonempty_overwrite=args.allow_nonempty_overwrite,
-        include_sampling_qc=not args.skip_sampling_qc,
+        include_sampling_qc=(qa3_mode == "full") and not args.skip_sampling_qc,
         include_stage1_qa2_low=args.include_stage1_qa2_low,
     )
 

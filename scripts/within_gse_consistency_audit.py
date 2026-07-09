@@ -10,12 +10,17 @@ This script:
 1. Audits all Stage 1 fields within each GSE.
 2. Detects partial missing values, inconsistent values, and whole-GSE missing fields.
 3. Generates cell-level correction candidates.
-4. Automatically accepts only high-confidence blank-cell fills.
-5. Produces a corrected Stage 1 file for downstream Stage 2 input.
+4. Automatically accepts only high-confidence deterministic corrections:
+   - blank-cell fills from unanimous same-GSE evidence for selected fields;
+   - dedicated within-GSE rules such as GSM_Pert-derived GSE_Pert correction.
+5. Routes ambiguous or biologically variable cases to review instead of force-correcting.
+6. Produces a corrected Stage 1 file for downstream Stage 2 input.
 
 Important design choices
 ------------------------
-- Does NOT modify non-empty annotations automatically.
+- Does NOT broadly overwrite non-empty annotations.
+- Allows narrow deterministic non-empty correction only for explicit rule-backed cases,
+  such as GSE_Pert derived from within-GSE GSM_Pert.
 - Does NOT treat the literal string "NA" as blank by default, because "NA" may be a valid
   conservative annotation from Stage 1.
 - Does NOT force all samples in a GSE to have the same value.
@@ -113,6 +118,14 @@ REVIEW_ONLY_FIELDS = {
     "Outcome",
 }
 
+# Fields handled by dedicated deterministic QA1 rules.
+# These should still appear in the GSE_Field_Summary sheet, but they should not
+# also generate generic missing-cell candidates/review rows because the dedicated
+# rule below creates cleaner, rule-specific candidates and review items.
+DEDICATED_QA1_RULE_FIELDS = {
+    "GSE_Pert",
+}
+
 # Optional metadata fields that should never be corrected if present in files.
 NEVER_CORRECT_FIELDS = {
     "GSE_Info",
@@ -189,8 +202,17 @@ DEFAULT_THRESHOLDS = {
 }
 
 EMPTY_TOKENS = {"", "nan", "none", "null", "missing", "blank"}
-OPTIONAL_EMPTY_TOKENS = {"na", "n/a", "not available", "not applicable"}
-
+OPTIONAL_EMPTY_TOKENS = {
+    "na",
+    "n/a",
+    "not available",
+    "not applicable",
+    "unknown",
+    "not specified",
+    "not reported",
+    "not provided",
+    "unavailable",
+}
 
 @dataclass(frozen=True)
 class AuditConfig:
@@ -411,6 +433,258 @@ def should_auto_accept(
     )
     return True, "High", dominant_value, reason
 
+def _norm_token(value: Any) -> str:
+    return re.sub(r"\s+", " ", clean_value(value)).strip().casefold()
+
+
+def _norm_gsm_pert_status(value: Any, config: AuditConfig) -> str:
+    """
+    Normalize GSM_Pert for deterministic QA1 logic.
+
+    Only exact controlled values are accepted for auto-logic.
+    Other values are treated as unresolved and routed away from auto-correction.
+    """
+    if is_missing(value, config.treat_na_as_missing):
+        return "missing"
+
+    v = _norm_token(value)
+
+    if v == "perturbed":
+        return "Perturbed"
+
+    if v == "control":
+        return "Control"
+
+    return "other"
+
+
+def _norm_gse_pert_status(value: Any, config: AuditConfig) -> str:
+    """
+    Normalize GSE_Pert for deterministic QA1 logic.
+    """
+    if is_missing(value, config.treat_na_as_missing):
+        return "missing"
+
+    v = _norm_token(value)
+
+    if v == "yes":
+        return "Yes"
+
+    if v == "no":
+        return "No"
+
+    return "other"
+
+
+def _has_nonempty_perturbation_details(gse_df: pd.DataFrame, config: AuditConfig) -> bool:
+    """
+    Conservative check for treatment details in an all-control GSE.
+
+    If all GSM_Pert values are Control but perturbation detail fields are present,
+    do not auto-set contradictory GSE_Pert values to No; route for review instead.
+    """
+    detail_cols = [
+        "Pert",
+        "Pert_Dose",
+        "Pert_Freq",
+        "Pert_Duration",
+        "Route_Admin",
+    ]
+
+    control_like = {
+        "control",
+        "untreated",
+        "vehicle",
+        "vehicle control",
+        "mock",
+        "sham",
+        "none",
+        "no treatment",
+        "no-treatment",
+        "no perturbation",
+    }
+
+    for col in detail_cols:
+        if col not in gse_df.columns:
+            continue
+
+        for value in gse_df[col].tolist():
+            if is_missing(value, config.treat_na_as_missing):
+                continue
+
+            v = _norm_token(value)
+            if v not in control_like:
+                return True
+
+    return False
+
+
+def apply_gse_pert_consistency_rule(
+    *,
+    corrected: pd.DataFrame,
+    df_original: pd.DataFrame,
+    gse_df: pd.DataFrame,
+    gse_id_clean: str,
+    config: AuditConfig,
+    candidate_rows: List[Dict[str, Any]],
+    review_rows: List[Dict[str, Any]],
+) -> None:
+    """
+    Deterministic QA1 rule for GSE_Pert based on within-GSE GSM_Pert values.
+
+    Auto-corrects:
+      - any GSM_Pert == Perturbed  -> GSE_Pert = Yes
+      - all GSM_Pert == Control and GSE_Pert missing -> GSE_Pert = No
+
+    Review only:
+      - all GSM_Pert == Control but existing GSE_Pert == Yes
+      - unresolved GSM_Pert values
+    """
+    if "GSE_Pert" not in gse_df.columns or "GSM_Pert" not in gse_df.columns:
+        return
+
+    gsm_statuses = [
+        _norm_gsm_pert_status(v, config)
+        for v in gse_df["GSM_Pert"].tolist()
+    ]
+
+    if not gsm_statuses:
+        return
+
+    status_counts = {
+        status: int(gsm_statuses.count(status))
+        for status in sorted(set(gsm_statuses))
+    }
+
+    any_perturbed = any(s == "Perturbed" for s in gsm_statuses)
+    all_control = all(s == "Control" for s in gsm_statuses)
+
+    target_value = ""
+    rule_name = ""
+    reason = ""
+    allow_overwrite_yes_to_no = False
+
+    if any_perturbed:
+        target_value = "Yes"
+        rule_name = "GSE_Pert derived from any GSM_Pert Perturbed"
+        reason = (
+            "High-confidence deterministic correction: at least one GSM in this GSE "
+            "has GSM_Pert=Perturbed, so GSE_Pert should be Yes."
+        )
+
+    elif all_control:
+        target_value = "No"
+        rule_name = "GSE_Pert derived from all GSM_Pert Control"
+        reason = (
+            "High-confidence deterministic fill: all GSMs in this GSE have "
+            "GSM_Pert=Control, so missing GSE_Pert can be filled as No."
+        )
+        allow_overwrite_yes_to_no = False
+
+        # If all samples are Control but perturbation detail fields exist,
+        # do not auto-correct to No; route to review.
+        if _has_nonempty_perturbation_details(gse_df, config):
+            review_rows.append(
+                {
+                    "Issue_ID": f"{gse_id_clean}__GSE_Pert_GSM_Pert_Detail_Conflict",
+                    "GSE_ID": gse_id_clean,
+                    "Field": "GSE_Pert",
+                    "Issue_Type": "All GSM_Pert Control but perturbation detail fields present",
+                    "Review_Priority": "High - Perturbation Review",
+                    "Field_Policy": "deterministic_review",
+                    "N_Total": int(gse_df.shape[0]),
+                    "N_Missing": 0,
+                    "Missing_Pct": 0,
+                    "Value_Distribution_JSON": json.dumps(status_counts, ensure_ascii=False),
+                    "Dominant_Value": "Control",
+                    "Dominant_Ratio_NonMissing": 1.0,
+                    "Example_Missing_GSMs": "",
+                    "LLM_Reviewer_Status": "Pending",
+                    "Human_Review_Status": "Pending",
+                    "Reviewer_Decision": "",
+                    "Reviewer_Reason": "",
+                }
+            )
+            return
+
+    else:
+        # Mixed missing/other GSM_Pert statuses are not safe for deterministic correction.
+        return
+
+    review_added = False
+
+    for idx in gse_df.index:
+        old_value = corrected.at[idx, "GSE_Pert"]
+        old_status = _norm_gse_pert_status(old_value, config)
+
+        if old_status == target_value:
+            continue
+
+        auto_accept = True
+
+        # Conservative safety rule:
+        # do not overwrite an existing GSE_Pert=Yes to No based only on all-control GSM_Pert.
+        if target_value == "No" and old_status == "Yes" and not allow_overwrite_yes_to_no:
+            auto_accept = False
+
+        # Unknown/non-controlled current values should be reviewed for target No.
+        if target_value == "No" and old_status == "other":
+            auto_accept = False
+
+        action = "AUTO_ACCEPT_GSE_PERT_RULE" if auto_accept else "REVIEW_REQUIRED"
+
+        try:
+            row_index = int(idx)
+        except Exception:
+            row_index = clean_value(idx)
+
+        candidate_rows.append(
+            {
+                "GSE_ID": gse_id_clean,
+                "GSM_ID": clean_value(df_original.at[idx, config.gsm_col]),
+                "Row_Index_0Based": row_index,
+                "Field": "GSE_Pert",
+                "Old_Value": clean_value(old_value),
+                "Suggested_Value": target_value,
+                "Correction_Type": rule_name,
+                "Confidence": "High" if auto_accept else "Medium",
+                "Auto_Accept": "YES" if auto_accept else "NO",
+                "Action": action,
+                "Evidence": reason,
+                "Same_GSE_Value_Distribution_JSON": json.dumps(status_counts, ensure_ascii=False),
+                "Dominant_Ratio_NonMissing": 1.0 if all_control else "",
+                "Missing_Pct": 0,
+                "Accept_Correction": "YES" if auto_accept else "REVIEW",
+                "Reviewer_Notes": "",
+            }
+        )
+
+        if auto_accept:
+            corrected.at[idx, "GSE_Pert"] = target_value
+
+        elif not review_added:
+            review_rows.append(
+                {
+                    "Issue_ID": f"{gse_id_clean}__GSE_Pert_GSM_Pert_Consistency",
+                    "GSE_ID": gse_id_clean,
+                    "Field": "GSE_Pert",
+                    "Issue_Type": "GSE_Pert conflicts with within-GSE GSM_Pert distribution",
+                    "Review_Priority": "High - Perturbation Review",
+                    "Field_Policy": "deterministic_review",
+                    "N_Total": int(gse_df.shape[0]),
+                    "N_Missing": 0,
+                    "Missing_Pct": 0,
+                    "Value_Distribution_JSON": json.dumps(status_counts, ensure_ascii=False),
+                    "Dominant_Value": target_value,
+                    "Dominant_Ratio_NonMissing": 1.0 if all_control else "",
+                    "Example_Missing_GSMs": "",
+                    "LLM_Reviewer_Status": "Pending",
+                    "Human_Review_Status": "Pending",
+                    "Reviewer_Decision": "",
+                    "Reviewer_Reason": "",
+                }
+            )
+            review_added = True
 
 def build_audit_and_corrections(
     df: pd.DataFrame,
@@ -473,7 +747,7 @@ def build_audit_and_corrections(
             )
 
             # Add GSE-level review queue rows for meaningful issues.
-            if issue_type != "No Issue":
+            if issue_type != "No Issue" and field not in DEDICATED_QA1_RULE_FIELDS:
                 review_rows.append(
                     {
                         "Issue_ID": f"{gse_id_clean}__{field}",
@@ -497,7 +771,9 @@ def build_audit_and_corrections(
                 )
 
             # Cell-level candidates for missing cells only.
-            if missing_count > 0:
+            # Dedicated-rule fields such as GSE_Pert are handled by their own
+            # deterministic rule below, so avoid duplicate generic candidates.
+            if missing_count > 0 and field not in DEDICATED_QA1_RULE_FIELDS:
                 missing_idx = gse_df.index[gse_df[field].apply(lambda x: is_missing(x, config.treat_na_as_missing))]
                 for idx in missing_idx:
                     old_value = df.at[idx, field]
@@ -532,12 +808,21 @@ def build_audit_and_corrections(
                     )
                     if auto_accept:
                         corrected.at[idx, field] = suggested_value
+        
+        apply_gse_pert_consistency_rule(
+            corrected=corrected,
+            df_original=df,
+            gse_df=gse_df,
+            gse_id_clean=gse_id_clean,
+            config=config,
+            candidate_rows=candidate_rows,
+            review_rows=review_rows,
+        )
 
     summary_df = pd.DataFrame(summary_rows)
     candidates_df = pd.DataFrame(candidate_rows)
     review_queue_df = pd.DataFrame(review_rows)
     return corrected, summary_df, candidates_df, review_queue_df
-
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Within-GSE consistency audit and Stage 1 high-confidence correction")

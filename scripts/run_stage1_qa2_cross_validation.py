@@ -52,6 +52,12 @@ def main() -> None:
     workdir = Path(args.workdir).resolve()
     output_dir = Path(args.output_dir).resolve() if args.output_dir else workdir / "artifacts" / "outputs"
     output_dir.mkdir(parents=True, exist_ok=True)
+     
+    print("[Stage1 QA2] Running deterministic cross-agent and cross-field validation.")
+    print("[Stage1 QA2] This step does not overwrite Stage 1 values.")
+    print("[Stage1 QA2] Issues are written to the cross-agent validation report and may feed QA3.")
+    print(f"[Stage1 QA2] Input: {Path(args.stage1).resolve()}")
+    print(f"[Stage1 QA2] Output directory: {output_dir}")
 
     script_dir = Path(__file__).resolve().parent
     validation_script = script_dir / "stage1_cross_agent_validation.py"

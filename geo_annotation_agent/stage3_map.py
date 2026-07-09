@@ -524,6 +524,142 @@ def add_cp_mapping_status(df_out: pd.DataFrame) -> pd.DataFrame:
     df_out["CP_Mapping_Status"] = df_out.apply(status, axis=1)
     return df_out
 
+def _normalize_pert_release_text(x: Any) -> str:
+    """
+    Normalize perturbation dose/duration text for final release mapping.
+    Blank, NA, and Unknown are returned as empty string.
+    """
+    v = _blank(x)
+    if not v:
+        return ""
+
+    v = str(v).strip()
+    v = v.replace("μ", "µ")
+    v = re.sub(r"\s+", " ", v)
+    return v
+
+
+def map_pert_dose_for_release(x: Any) -> str:
+    """
+    Final downstream-ready dose field.
+
+    Keep only single-dose entries with approved units:
+      µM, nM, mM, ng/ml, µg/ml, mg
+
+    Return:
+      NA      = no dose information
+      Others  = dose exists but is not approved or contains multiple values
+    """
+    v = _normalize_pert_release_text(x)
+    if not v:
+        return "NA"
+
+    # Multiple numeric values usually indicate dose ranges or multiple doses:
+    # e.g., 1, 5, 10 µM; 5-10 µM; 1 and 10 µM.
+    nums = re.findall(r"\d+(?:\.\d+)?", v)
+    if len(nums) != 1:
+        return "Others"
+
+    # Allow common micro variants but standardize output to µM / µg/ml.
+    m = re.fullmatch(
+        r"\s*(\d+(?:\.\d+)?)\s*(µm|um|nm|mm|ng/ml|ng/mL|µg/ml|µg/mL|ug/ml|ug/mL|mg)\s*",
+        v,
+        flags=re.I,
+    )
+
+    if not m:
+        return "Others"
+
+    value = m.group(1)
+    unit_raw = m.group(2).replace("μ", "µ").lower()
+
+    unit_map = {
+        "µm": "µM",
+        "um": "µM",
+        "nm": "nM",
+        "mm": "mM",
+        "ng/ml": "ng/ml",
+        "µg/ml": "µg/ml",
+        "ug/ml": "µg/ml",
+        "mg": "mg",
+    }
+
+    unit = unit_map.get(unit_raw)
+    if not unit:
+        return "Others"
+
+    return f"{value} {unit}"
+
+
+def map_pert_duration_for_release(x: Any) -> str:
+    """
+    Final downstream-ready duration field.
+
+    Keep only single-duration entries with approved units:
+      Minutes, Hours, Days, Weeks, Months
+
+    Return:
+      NA      = no duration information
+      Others  = duration exists but is not approved or contains multiple values
+    """
+    v = _normalize_pert_release_text(x)
+    if not v:
+        return "NA"
+
+    # Convert single hyphenated duration forms such as 24-hour to 24 hour.
+    # This does not convert ranges such as 3-5 days.
+    v = re.sub(
+        r"(\d+(?:\.\d+)?)\s*-\s*(minute|minutes|min|mins|hour|hours|hr|hrs|h|day|days|d|week|weeks|wk|wks|month|months|mo|mos)\b",
+        r"\1 \2",
+        v,
+        flags=re.I,
+    )
+
+    nums = re.findall(r"\d+(?:\.\d+)?", v)
+    if len(nums) != 1:
+        return "Others"
+
+    m = re.fullmatch(
+        r"\s*(\d+(?:\.\d+)?)\s*(minute|minutes|min|mins|hour|hours|hr|hrs|h|day|days|d|week|weeks|wk|wks|month|months|mo|mos)\s*",
+        v,
+        flags=re.I,
+    )
+
+    if not m:
+        return "Others"
+
+    value = m.group(1)
+    unit_raw = m.group(2).lower()
+
+    unit_map = {
+        "minute": "Minutes",
+        "minutes": "Minutes",
+        "min": "Minutes",
+        "mins": "Minutes",
+        "hour": "Hours",
+        "hours": "Hours",
+        "hr": "Hours",
+        "hrs": "Hours",
+        "h": "Hours",
+        "day": "Days",
+        "days": "Days",
+        "d": "Days",
+        "week": "Weeks",
+        "weeks": "Weeks",
+        "wk": "Weeks",
+        "wks": "Weeks",
+        "month": "Months",
+        "months": "Months",
+        "mo": "Months",
+        "mos": "Months",
+    }
+
+    unit = unit_map.get(unit_raw)
+    if not unit:
+        return "Others"
+
+    return f"{value} {unit}"
+
 def _norm(s: str) -> str:
     return str(s).strip().lower() if s is not None else ""
 
@@ -1528,33 +1664,136 @@ CP_LLM_SYSTEM = (
 # -------------------------
 # PubChem helpers
 # -------------------------
-def _request_json(url: str, timeout: int = 20, max_retries: int = 3):
+def _request_json_with_status(
+    url: str,
+    timeout: int = 20,
+    max_retries: int = 3,
+) -> Tuple[Optional[Dict[str, Any]], str, str]:
+    """
+    PubChem JSON request with retry and explicit status.
+
+    Returns:
+      data, status, error
+
+    status values:
+      ok
+      not_found
+      server_busy
+      request_failed
+      timeout
+      invalid_json
+    """
+    last_error = ""
+
     for attempt in range(1, max_retries + 1):
         try:
             r = requests.get(url, timeout=timeout)
+            text = r.text or ""
+
             if r.status_code == 200:
-                return r.json()
+                try:
+                    return r.json(), "ok", ""
+                except ValueError as e:
+                    last_error = f"invalid_json: {e}"
+                    return None, "invalid_json", last_error
+
             if r.status_code == 404:
-                return None
-        except requests.RequestException:
-            pass
-        time.sleep(0.5 * attempt)
-    return None
+                return None, "not_found", "HTTP 404 not found"
+
+            if (
+                r.status_code in {429, 500, 502, 503, 504}
+                or "PUGREST.ServerBusy" in text
+                or "too many requests" in text.lower()
+                or "server busy" in text.lower()
+            ):
+                last_error = f"HTTP {r.status_code}: {text[:300]}"
+                if attempt < max_retries:
+                    time.sleep(0.75 * attempt)
+                    continue
+                return None, "server_busy", last_error
+
+            last_error = f"HTTP {r.status_code}: {text[:300]}"
+            if attempt < max_retries:
+                time.sleep(0.75 * attempt)
+                continue
+            return None, "request_failed", last_error
+
+        except requests.Timeout as e:
+            last_error = f"timeout: {e}"
+            if attempt < max_retries:
+                time.sleep(0.75 * attempt)
+                continue
+            return None, "timeout", last_error
+
+        except requests.RequestException as e:
+            last_error = f"request_exception: {e}"
+            if attempt < max_retries:
+                time.sleep(0.75 * attempt)
+                continue
+            return None, "request_failed", last_error
+
+    return None, "request_failed", last_error
+
+def _request_json(url: str, timeout: int = 20, max_retries: int = 3):
+    """
+    Backward-compatible wrapper for older helper calls.
+    Existing title/smiles/synonym helpers can keep using _request_json().
+    """
+    data, _, _ = _request_json_with_status(
+        url=url,
+        timeout=timeout,
+        max_retries=max_retries,
+    )
+    return data
 
 
-def pubchem_cid_from_name(term: str, timeout: int = 20) -> Optional[str]:
+def pubchem_cid_lookup_from_name(
+    term: str,
+    timeout: int = 20,
+    max_retries: int = 3,
+) -> Tuple[Optional[str], str, str]:
+    """
+    PubChem name-to-CID lookup with explicit status.
+
+    Returns:
+      cid, status, error
+    """
     if not term or not str(term).strip():
-        return None
+        return None, "pubchem_direct_no_query", "No valid PubChem query term."
 
     q = requests.utils.quote(str(term).strip())
     url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{q}/cids/JSON"
-    data = _request_json(url, timeout=timeout)
 
-    if not data:
-        return None
+    data, request_status, error = _request_json_with_status(
+        url=url,
+        timeout=timeout,
+        max_retries=max_retries,
+    )
 
-    cids = data.get("IdentifierList", {}).get("CID", [])
-    return normalize_pubchem_cid(cids[0]) if cids else None
+    if request_status == "not_found":
+        return None, "pubchem_direct_not_found", error
+
+    if request_status == "server_busy":
+        return None, "pubchem_direct_server_busy", error
+
+    if request_status == "timeout":
+        return None, "pubchem_direct_timeout", error
+
+    if request_status != "ok":
+        return None, "pubchem_direct_request_failed", error
+
+    cids = data.get("IdentifierList", {}).get("CID", []) if isinstance(data, dict) else []
+    if not cids:
+        return None, "pubchem_direct_not_found", "PubChem response contained no CID."
+
+    return normalize_pubchem_cid(cids[0]), "pubchem_direct_cid_found", ""
+
+def pubchem_cid_from_name(term: str, timeout: int = 20) -> Optional[str]:
+    """
+    Backward-compatible CID helper.
+    """
+    cid, _, _ = pubchem_cid_lookup_from_name(term, timeout=timeout, max_retries=3)
+    return cid
 
 
 def pubchem_cid_from_url(pubchem_url: str) -> str:
@@ -1643,20 +1882,6 @@ def pubchem_title_and_smiles_from_cid(cid: str, timeout: int = 20) -> Dict[str, 
         return fallback
 
 
-def pubchem_synonyms_for_cid(cid: str, timeout: int = 20) -> set[str]:
-    url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/synonyms/JSON"
-    data = _request_json(url, timeout=timeout)
-
-    if not data:
-        return set()
-
-    try:
-        syns = data["InformationList"]["Information"][0]["Synonym"]
-        return {_norm(s) for s in syns if s}
-    except Exception:
-        return set()
-
-
 def resolve_cp_term_with_pubchem(query_term: str, timeout: int = 20) -> Dict[str, str]:
     """
     Direct PubChem lookup using the standardized Pert_Post term.
@@ -1666,34 +1891,74 @@ def resolve_cp_term_with_pubchem(query_term: str, timeout: int = 20) -> Dict[str
     and also uses a tolerant key that ignores hyphens, spaces, underscores,
     and punctuation.
 
-    No LLM remapping is performed here. If the direct PubChem result cannot be
-    verified, the compound fields are left blank and the term is retained for
-    manual review.
+    PubChem failure states are explicitly labeled so reviewers can distinguish:
+      - true not found
+      - server busy / request failed / timeout
+      - unverified CID
     """
     raw = _blank(query_term)
 
+    base_empty = {
+        "CP_PubChem_Name": "",
+        "CP_CID": "",
+        "CP_CanonicalSMILES": "",
+        "CP_PubChemURL": "",
+    }
+
     if not raw:
         return {
-            "CP_PubChem_Name": "",
-            "CP_CID": "",
-            "CP_CanonicalSMILES": "",
-            "CP_PubChemURL": "",
+            **base_empty,
             "CP_MatchType": "",
             "CP_Map_Explanation": "No valid PubChem query term.",
             "CP_Map_Method": "pubchem_direct_no_query",
+            "CP_Query_Status": "pubchem_direct_no_query",
+            "CP_Query_Error": "No valid PubChem query term.",
+            "CP_Query_Attempted_Term": "",
         }
 
-    cid = pubchem_cid_from_name(raw, timeout=timeout)
+    cid, cid_status, cid_error = pubchem_cid_lookup_from_name(
+        raw,
+        timeout=timeout,
+        max_retries=3,
+    )
 
     if not cid:
+        match_type = {
+            "pubchem_direct_not_found": "not_found",
+            "pubchem_direct_server_busy": "server_busy",
+            "pubchem_direct_timeout": "timeout",
+            "pubchem_direct_request_failed": "request_failed",
+        }.get(cid_status, "request_failed")
+
+        explanation = {
+            "pubchem_direct_not_found": (
+                "Direct PubChem lookup returned no CID for standardized Pert_Post term; "
+                "manual compound-name verification is required."
+            ),
+            "pubchem_direct_server_busy": (
+                "PubChem server was busy or rate-limited during direct lookup; "
+                "rerun PubChem mapping later."
+            ),
+            "pubchem_direct_timeout": (
+                "PubChem direct lookup timed out; rerun PubChem mapping later."
+            ),
+            "pubchem_direct_request_failed": (
+                "PubChem direct lookup failed due to request/response error; "
+                "rerun PubChem mapping later."
+            ),
+        }.get(
+            cid_status,
+            "Direct PubChem lookup failed for standardized Pert_Post term.",
+        )
+
         return {
-            "CP_PubChem_Name": "",
-            "CP_CID": "",
-            "CP_CanonicalSMILES": "",
-            "CP_PubChemURL": "",
-            "CP_MatchType": "not_found",
-            "CP_Map_Explanation": "Direct PubChem lookup failed for standardized Pert_Post term.",
-            "CP_Map_Method": "pubchem_direct_not_found",
+            **base_empty,
+            "CP_MatchType": match_type,
+            "CP_Map_Explanation": explanation,
+            "CP_Map_Method": cid_status,
+            "CP_Query_Status": cid_status,
+            "CP_Query_Error": cid_error,
+            "CP_Query_Attempted_Term": raw,
         }
 
     props = pubchem_title_and_smiles_from_cid(cid, timeout=timeout)
@@ -1713,6 +1978,9 @@ def resolve_cp_term_with_pubchem(query_term: str, timeout: int = 20) -> Dict[str
             "CP_MatchType": "exact_title",
             "CP_Map_Explanation": "Direct PubChem lookup matched standardized Pert_Post to PubChem title.",
             "CP_Map_Method": "pubchem_direct_title",
+            "CP_Query_Status": "pubchem_direct_title",
+            "CP_Query_Error": "",
+            "CP_Query_Attempted_Term": raw,
         }
 
     syns = pubchem_synonyms_for_cid(cid, timeout=timeout)
@@ -1727,19 +1995,22 @@ def resolve_cp_term_with_pubchem(query_term: str, timeout: int = 20) -> Dict[str
             "CP_MatchType": "synonym",
             "CP_Map_Explanation": "Direct PubChem lookup matched standardized Pert_Post to PubChem synonym.",
             "CP_Map_Method": "pubchem_direct_synonym",
+            "CP_Query_Status": "pubchem_direct_synonym",
+            "CP_Query_Error": "",
+            "CP_Query_Attempted_Term": raw,
         }
 
     return {
-        "CP_PubChem_Name": "",
-        "CP_CID": "",
-        "CP_CanonicalSMILES": "",
-        "CP_PubChemURL": "",
+        **base_empty,
         "CP_MatchType": "unverified",
         "CP_Map_Explanation": (
             "PubChem returned a CID, but the standardized Pert_Post term did not match "
             "the PubChem title or synonyms after tolerant normalization."
         ),
         "CP_Map_Method": "pubchem_direct_unverified",
+        "CP_Query_Status": "pubchem_direct_unverified",
+        "CP_Query_Error": "",
+        "CP_Query_Attempted_Term": raw,
     }
 
 def backfill_cp_smiles_from_existing_ids(df: pd.DataFrame, timeout: int = 20) -> pd.DataFrame:
@@ -2111,6 +2382,9 @@ def save_stage3_novel_term_workbooks(
         "Pert",
         {
             "pubchem_direct_not_found",
+            "pubchem_direct_server_busy",
+            "pubchem_direct_request_failed",
+            "pubchem_direct_timeout",
             "pubchem_direct_unverified",
             "pubchem_direct_no_query",
         },
@@ -3344,6 +3618,9 @@ def run_stage3_mapping(cfg, df_stage2: pd.DataFrame) -> pd.DataFrame:
                 "CP_MatchType": "",
                 "CP_Map_Explanation": "",
                 "CP_Map_Method": "",
+                "CP_Query_Status": "",
+                "CP_Query_Error": "",
+                "CP_Query_Attempted_Term": "",
             }
 
         rec = cp_cache.get(_s(pert_post), {})
@@ -3355,6 +3632,9 @@ def run_stage3_mapping(cfg, df_stage2: pd.DataFrame) -> pd.DataFrame:
             "CP_MatchType": rec.get("CP_MatchType", ""),
             "CP_Map_Explanation": rec.get("CP_Map_Explanation", ""),
             "CP_Map_Method": rec.get("CP_Map_Method", ""),
+            "CP_Query_Status": rec.get("CP_Query_Status", rec.get("CP_Map_Method", "")),
+            "CP_Query_Error": rec.get("CP_Query_Error", ""),
+            "CP_Query_Attempted_Term": rec.get("CP_Query_Attempted_Term", _s(pert_post)),
         }
 
     df_cp = pd.DataFrame(
@@ -3417,6 +3697,40 @@ def run_stage3_mapping(cfg, df_stage2: pd.DataFrame) -> pd.DataFrame:
     # -------------------------
     df = backfill_cp_smiles_from_existing_ids(df, timeout=int(cfg.pubchem_timeout_sec))
     df = add_cp_mapping_status(df)
+
+    # -------------------------
+    # Final perturbation dose/duration release mapping
+    # -------------------------
+    if "Pert_Dose_Post" not in df.columns:
+        df["Pert_Dose_Post"] = "NA"
+
+    if "Pert_Duration_Post" not in df.columns:
+        df["Pert_Duration_Post"] = "NA"
+
+    df["Mapped_Pert_Dose"] = df["Pert_Dose_Post"].map(map_pert_dose_for_release)
+    df["Mapped_Pert_Duration"] = df["Pert_Duration_Post"].map(map_pert_duration_for_release)
+
+    dose_na = int(df["Mapped_Pert_Dose"].eq("NA").sum())
+    dose_others = int(df["Mapped_Pert_Dose"].eq("Others").sum())
+    dose_approved = int((~df["Mapped_Pert_Dose"].isin(["NA", "Others"])).sum())
+
+    duration_na = int(df["Mapped_Pert_Duration"].eq("NA").sum())
+    duration_others = int(df["Mapped_Pert_Duration"].eq("Others").sum())
+    duration_approved = int((~df["Mapped_Pert_Duration"].isin(["NA", "Others"])).sum())
+
+    print(
+        "[Stage3 Pert dose] "
+        f"rows={len(df)}; "
+        f"Mapped_Pert_Dose: approved_single={dose_approved}, NA={dose_na}, Others={dose_others}",
+        flush=True,
+    )
+
+    print(
+        "[Stage3 Pert duration] "
+        f"rows={len(df)}; "
+        f"Mapped_Pert_Duration: approved_single={duration_approved}, NA={duration_na}, Others={duration_others}",
+        flush=True,
+    )
 
     # -------------------------
     # RNA_Source mapping for automated Mode A release.
@@ -3605,12 +3919,17 @@ def run_stage3_mapping(cfg, df_stage2: pd.DataFrame) -> pd.DataFrame:
         "CP_MatchType",
         "CP_Map_Explanation",
         "CP_Map_Method",
+        "CP_Query_Status",
+        "CP_Query_Error",
+        "CP_Query_Attempted_Term",
         "Pert_Dose_Pre",
         "Pert_Dose_Post",
+        "Mapped_Pert_Dose",
         "Pert_Freq_Pre",
         "Pert_Freq_Post",
         "Pert_Duration_Pre",
         "Pert_Duration_Post",
+        "Mapped_Pert_Duration",
         "Route_Admin_Pre",
         "Route_Admin_Post",
         "SampleType",
@@ -3669,6 +3988,9 @@ def run_stage3_mapping(cfg, df_stage2: pd.DataFrame) -> pd.DataFrame:
         "CP_MatchType",
         "CP_Map_Explanation",
         "CP_Map_Method",
+        "CP_Query_Status",
+        "CP_Query_Error",
+        "CP_Query_Attempted_Term",
         "RNA_Source_Mapped",
         "RNA_Source",
         "RNA_Source_Mapping_Status",
@@ -3699,6 +4021,8 @@ def run_stage3_mapping(cfg, df_stage2: pd.DataFrame) -> pd.DataFrame:
     "CP_CanonicalSMILES",
     "CP_PubChemURL",
     "CP_MatchType",
+    "Mapped_Pert_Dose",
+    "Mapped_Pert_Duration",
     }
 
     for c in final_cols:
@@ -3875,8 +4199,6 @@ def run_stage3_mapping(cfg, df_stage2: pd.DataFrame) -> pd.DataFrame:
         }
     )
 
-
-
     # ============================================================
     # CP perturbation GSE release file with renamed columns
     # Keep all GSMs from any GSE containing at least one CP sample.
@@ -3902,6 +4224,8 @@ def run_stage3_mapping(cfg, df_stage2: pd.DataFrame) -> pd.DataFrame:
         "Sex_Post",
         "Pert_Post",
         "Pert_Type",
+        "Mapped_Pert_Dose",
+        "Mapped_Pert_Duration",
         #"CP_Mapping_Status",
         "CP_PubChem_Name",
         "CP_CID",
@@ -3991,10 +4315,21 @@ def run_stage3_mapping(cfg, df_stage2: pd.DataFrame) -> pd.DataFrame:
     )
 
     df_stage3_mapped_out = build_stage3_mapped_output_view(df_final)
+
+    # Public CP perturbation release column names.
+    # Keep df_cp_release internally unchanged for Stage 3.5 QC/reporting,
+    # but write public-facing Pert_Dose and Pert_Duration column names.
+    df_cp_release_public = df_cp_release.rename(
+        columns={
+            "Mapped_Pert_Dose": "Pert_Dose",
+            "Mapped_Pert_Duration": "Pert_Duration",
+        }
+    )
+
     df_stage3_mapped_out.to_excel(out_xlsx, index=False)
     df_release.to_excel(release_xlsx, index=False)
     df_simple_release.to_excel(simple_release_xlsx, index=False)
-    df_cp_release.to_excel(cp_release_xlsx, index=False)
+    df_cp_release_public.to_excel(cp_release_xlsx, index=False)
 
     review_df.to_excel(review_xlsx, index=False)
     cp_excluded_df.to_excel(cp_excluded_xlsx, index=False)

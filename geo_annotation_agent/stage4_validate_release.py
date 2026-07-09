@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Tuple
 
 import pandas as pd
-
+from .excel_report_utils import format_excel_workbook
 
 NA_LABEL = "NA"
 
@@ -573,6 +573,8 @@ def _write_stage4_workbook(
                 pd.DataFrame().to_excel(writer, sheet_name=safe_name, index=False)
             else:
                 sheet_df.to_excel(writer, sheet_name=safe_name, index=False)
+
+    format_excel_workbook(path)
 
     return path
 

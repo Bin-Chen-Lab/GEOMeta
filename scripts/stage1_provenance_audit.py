@@ -29,7 +29,7 @@ from typing import Any, Dict, Iterable, Mapping, Optional
 import pandas as pd
 
 from geo_annotation_agent.excel_safe import add_long_text_part_columns_for_excel
-
+from geo_annotation_agent.excel_report_utils import format_excel_workbook
 
 EXCEL_MAX_ROWS = 1_048_576
 EXCEL_MAX_SHEET_NAME = 31
@@ -393,11 +393,23 @@ def write_stage1_provenance_workbook(
             },
             {
                 "Policy": "QA3",
-                "Rule": "Only accepted high-confidence evidence-supported missing-cell rescue corrections are auto-applied by default.",
+                "Rule": (
+                    "QA3 supports off/smart/full modes. Smart mode is the default and runs prioritized "
+                    "evidence-grounded LLM verification for high-value unresolved issues. Only accepted "
+                    "high-confidence evidence-supported corrections are auto-applied by default."
+                ),
             },
             {
                 "Policy": "Final Stage1 for Stage2",
                 "Rule": "Stage1_Final_For_Stage2 is the only Stage 1 layer passed to Stage 2.",
+            },
+
+            {
+                "Policy": "Run folder",
+                "Rule": (
+                    "The pipeline creates artifacts/runs/<run_version>/ as a user-facing index folder. "
+                    "Original artifact paths remain unchanged for backward compatibility."
+                ),
             },
         ]
     )
@@ -487,5 +499,7 @@ def write_stage1_provenance_workbook(
         ),
         encoding="utf-8",
     )
+
+    format_excel_workbook(output_path)
 
     return output_path

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Iterable, Tuple
 
 import pandas as pd
+from .excel_report_utils import format_excel_workbook
 
 
 MISSING_TOKENS = {"", "na", "n/a", "nan", "none", "null", "unknown", "not specified", "not reported", "not available", "not applicable"}
@@ -313,6 +314,301 @@ def build_mode_a_cp_release(df_final: pd.DataFrame, cp_release_cols: list[str]) 
 
     return release, excluded
 
+def _stage3_5_is_blank(x) -> bool:
+    v = "" if x is None else str(x).strip()
+    return v == "" or v.lower() in {"na", "nan", "none", "unknown", "null"}
+
+
+def _stage3_5_value_counts_df(
+    df: pd.DataFrame,
+    column: str,
+    label_col: str,
+    count_col: str = "Count",
+) -> pd.DataFrame:
+    if df is None or df.empty or column not in df.columns:
+        return pd.DataFrame(columns=[label_col, count_col, "Percent"])
+
+    out = (
+        df[column]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .replace({"": "NA"})
+        .value_counts(dropna=False)
+        .reset_index()
+    )
+    out.columns = [label_col, count_col]
+
+    denom = int(out[count_col].sum())
+    out["Percent"] = out[count_col].map(lambda x: round((int(x) / denom * 100), 3) if denom else 0)
+
+    return out
+
+
+def build_stage3_5_pert_dose_duration_summary(
+    df_final: pd.DataFrame,
+    df_cp_release: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """
+    Build summary metrics for final mapped perturbation dose/duration fields.
+
+    NA means no dose/duration information.
+    Others means dose/duration information exists but is not a single approved value.
+    approved_single means the value passed the final controlled release rule.
+    """
+    rows = []
+
+    def add_metrics(label: str, df: pd.DataFrame, dose_col: str, duration_col: str):
+        n = int(len(df)) if df is not None else 0
+
+        if df is None or df.empty:
+            rows.extend(
+                [
+                    {"Scope": label, "Field": "Mapped_Pert_Dose", "Metric": "Rows", "Value": 0},
+                    {"Scope": label, "Field": "Mapped_Pert_Duration", "Metric": "Rows", "Value": 0},
+                ]
+            )
+            return
+
+        for field, col in [
+            ("Mapped_Pert_Dose", dose_col),
+            ("Mapped_Pert_Duration", duration_col),
+        ]:
+            if col not in df.columns:
+                rows.append({"Scope": label, "Field": field, "Metric": "Column missing", "Value": "True"})
+                continue
+
+            s_clean = df[col].fillna("").astype(str).str.strip()
+            na_count = int((s_clean.eq("") | s_clean.str.upper().eq("NA")).sum())
+            others_count = int(s_clean.eq("Others").sum())
+            approved_count = int((~s_clean.isin(["", "NA", "Others"])).sum())
+
+            rows.extend(
+                [
+                    {"Scope": label, "Field": field, "Metric": "Rows", "Value": n},
+                    {"Scope": label, "Field": field, "Metric": "approved_single", "Value": approved_count},
+                    {"Scope": label, "Field": field, "Metric": "NA", "Value": na_count},
+                    {"Scope": label, "Field": field, "Metric": "Others", "Value": others_count},
+                    {
+                        "Scope": label,
+                        "Field": field,
+                        "Metric": "approved_single_percent",
+                        "Value": round((approved_count / n * 100), 3) if n else 0,
+                    },
+                    {
+                        "Scope": label,
+                        "Field": field,
+                        "Metric": "NA_percent",
+                        "Value": round((na_count / n * 100), 3) if n else 0,
+                    },
+                    {
+                        "Scope": label,
+                        "Field": field,
+                        "Metric": "Others_percent",
+                        "Value": round((others_count / n * 100), 3) if n else 0,
+                    },
+                ]
+            )
+
+    add_metrics(
+        label="stage3_mapped_all_rows",
+        df=df_final,
+        dose_col="Mapped_Pert_Dose",
+        duration_col="Mapped_Pert_Duration",
+    )
+
+    if df_cp_release is not None:
+        add_metrics(
+            label="cp_perturbation_release",
+            df=df_cp_release,
+            dose_col="Mapped_Pert_Dose",
+            duration_col="Mapped_Pert_Duration",
+        )
+
+    return pd.DataFrame(rows)
+
+
+def build_stage3_5_pert_dose_value_counts(df_final: pd.DataFrame) -> pd.DataFrame:
+    return _stage3_5_value_counts_df(
+        df=df_final,
+        column="Mapped_Pert_Dose",
+        label_col="Mapped_Pert_Dose",
+    )
+
+
+def build_stage3_5_pert_duration_value_counts(df_final: pd.DataFrame) -> pd.DataFrame:
+    return _stage3_5_value_counts_df(
+        df=df_final,
+        column="Mapped_Pert_Duration",
+        label_col="Mapped_Pert_Duration",
+    )
+
+
+def build_stage3_5_pubchem_query_status_summary(df_final: pd.DataFrame) -> pd.DataFrame:
+    """
+    Summarize PubChem direct-query outcomes.
+
+    Intended interpretation:
+      pubchem_direct_title / synonym: accepted
+      pubchem_direct_not_found: manual compound-name review
+      pubchem_direct_server_busy / request_failed / timeout: rerun PubChem later
+      pubchem_direct_unverified: manual review
+      pubchem_direct_no_query: fix/query review
+    """
+    if df_final is None or df_final.empty:
+        return pd.DataFrame(columns=["CP_Query_Status", "Count", "Percent", "Action"])
+
+    if "CP_Query_Status" not in df_final.columns:
+        return pd.DataFrame(columns=["CP_Query_Status", "Count", "Percent", "Action"])
+
+    work = df_final.copy()
+
+    if "Pert_Type" in work.columns:
+        work = work.loc[
+            work["Pert_Type"].fillna("").astype(str).str.strip().str.upper().eq("CP")
+        ].copy()
+
+    status_counts = _stage3_5_value_counts_df(
+        df=work,
+        column="CP_Query_Status",
+        label_col="CP_Query_Status",
+    )
+
+    action_map = {
+        "pubchem_direct_title": "Accept PubChem match",
+        "pubchem_direct_synonym": "Accept PubChem match",
+        "pubchem_direct_not_found": "Manual compound-name verification",
+        "pubchem_direct_server_busy": "Rerun PubChem mapping later",
+        "pubchem_direct_request_failed": "Rerun PubChem mapping later",
+        "pubchem_direct_timeout": "Rerun PubChem mapping later",
+        "pubchem_direct_unverified": "Manual review; CID returned but title/synonym did not verify",
+        "pubchem_direct_no_query": "Manual review; no valid query term",
+        "": "Not available",
+        "NA": "Not available",
+    }
+
+    if not status_counts.empty:
+        status_counts["Action"] = status_counts["CP_Query_Status"].map(
+            lambda x: action_map.get(str(x).strip(), "Review")
+        )
+
+    return status_counts
+
+
+def build_stage3_5_pubchem_failed_terms(df_final: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build term-level PubChem failure/retry report.
+
+    One row per Pert_Post / CP_Query_Status combination.
+    """
+    cols = [
+        "Pert_Post",
+        "CP_Query_Status",
+        "CP_Query_Error",
+        "CP_Query_Attempted_Term",
+        "CP_Map_Method",
+        "CP_MatchType",
+        "CP_Map_Explanation",
+        "GSE_ID",
+        "GSM_ID",
+    ]
+
+    if df_final is None or df_final.empty:
+        return pd.DataFrame(columns=cols)
+
+    work = df_final.copy()
+
+    required = {"Pert_Post", "Pert_Type", "CP_Query_Status"}
+    if not required.issubset(work.columns):
+        return pd.DataFrame(columns=cols)
+
+    cp_mask = work["Pert_Type"].fillna("").astype(str).str.strip().str.upper().eq("CP")
+
+    failed_statuses = {
+        "pubchem_direct_not_found",
+        "pubchem_direct_server_busy",
+        "pubchem_direct_request_failed",
+        "pubchem_direct_timeout",
+        "pubchem_direct_unverified",
+        "pubchem_direct_no_query",
+    }
+
+    failed = work.loc[
+        cp_mask
+        & work["CP_Query_Status"].fillna("").astype(str).str.strip().isin(failed_statuses)
+    ].copy()
+
+    if failed.empty:
+        return pd.DataFrame(
+            columns=[
+                "Pert_Post",
+                "CP_Query_Status",
+                "Recommended_Action",
+                "Sample_Count",
+                "GSE_Count",
+                "Example_GSE_IDs",
+                "Example_GSM_IDs",
+                "CP_Query_Attempted_Term",
+                "CP_Query_Error",
+                "CP_Map_Method",
+                "CP_MatchType",
+                "CP_Map_Explanation",
+            ]
+        )
+
+    action_map = {
+        "pubchem_direct_not_found": "Manual compound-name verification",
+        "pubchem_direct_server_busy": "Rerun PubChem mapping later",
+        "pubchem_direct_request_failed": "Rerun PubChem mapping later",
+        "pubchem_direct_timeout": "Rerun PubChem mapping later",
+        "pubchem_direct_unverified": "Manual review; CID returned but title/synonym did not verify",
+        "pubchem_direct_no_query": "Manual review; no valid query term",
+    }
+
+    def join_unique(s, n=10):
+        vals = [
+            str(x).strip()
+            for x in s.tolist()
+            if not _stage3_5_is_blank(x)
+        ]
+        vals = sorted(set(vals))
+        return " | ".join(vals[:n])
+
+    rows = []
+
+    for (pert_post, status), sub in failed.groupby(["Pert_Post", "CP_Query_Status"], dropna=False):
+        rows.append(
+            {
+                "Pert_Post": pert_post,
+                "CP_Query_Status": status,
+                "Recommended_Action": action_map.get(str(status).strip(), "Review"),
+                "Sample_Count": int(sub["GSM_ID"].astype(str).nunique()) if "GSM_ID" in sub.columns else int(len(sub)),
+                "GSE_Count": int(sub["GSE_ID"].astype(str).nunique()) if "GSE_ID" in sub.columns else 0,
+                "Example_GSE_IDs": join_unique(sub["GSE_ID"], n=10) if "GSE_ID" in sub.columns else "",
+                "Example_GSM_IDs": join_unique(sub["GSM_ID"], n=10) if "GSM_ID" in sub.columns else "",
+                "CP_Query_Attempted_Term": join_unique(sub["CP_Query_Attempted_Term"], n=5)
+                if "CP_Query_Attempted_Term" in sub.columns
+                else "",
+                "CP_Query_Error": join_unique(sub["CP_Query_Error"], n=3)
+                if "CP_Query_Error" in sub.columns
+                else "",
+                "CP_Map_Method": join_unique(sub["CP_Map_Method"], n=5)
+                if "CP_Map_Method" in sub.columns
+                else "",
+                "CP_MatchType": join_unique(sub["CP_MatchType"], n=5)
+                if "CP_MatchType" in sub.columns
+                else "",
+                "CP_Map_Explanation": join_unique(sub["CP_Map_Explanation"], n=3)
+                if "CP_Map_Explanation" in sub.columns
+                else "",
+            }
+        )
+
+    return (
+        pd.DataFrame(rows)
+        .sort_values(["Recommended_Action", "Sample_Count", "Pert_Post"], ascending=[True, False, True])
+        .reset_index(drop=True)
+    )
 
 def build_mode_a_stage3_5_report(
     df_final: pd.DataFrame,
@@ -321,25 +617,93 @@ def build_mode_a_stage3_5_report(
     cp_excluded_df: pd.DataFrame | None = None,
 ) -> dict[str, pd.DataFrame]:
     df = df_final.copy()
+
     summary_rows = [
         {"Metric": "Stage3 mapped rows", "Value": int(len(df)), "Status": "INFO"},
         {"Metric": "Final release rows", "Value": int(len(df_simple_release)), "Status": "INFO"},
         {"Metric": "CP release rows", "Value": int(len(df_cp_release)), "Status": "INFO"},
-        {"Metric": "Rows PASS", "Value": int((df.get("Global_QC_Status", pd.Series([], dtype=str)).astype(str) == "PASS").sum()), "Status": "INFO"},
-        {"Metric": "Rows REVIEW", "Value": int((df.get("Global_QC_Status", pd.Series([], dtype=str)).astype(str) == "REVIEW").sum()), "Status": "REVIEW"},
-        {"Metric": "Rows FAIL", "Value": int((df.get("Global_QC_Status", pd.Series([], dtype=str)).astype(str) == "FAIL").sum()), "Status": "FAIL"},
+        {
+            "Metric": "Rows PASS",
+            "Value": int((df.get("Global_QC_Status", pd.Series([], dtype=str)).astype(str) == "PASS").sum()),
+            "Status": "INFO",
+        },
+        {
+            "Metric": "Rows REVIEW",
+            "Value": int((df.get("Global_QC_Status", pd.Series([], dtype=str)).astype(str) == "REVIEW").sum()),
+            "Status": "REVIEW",
+        },
+        {
+            "Metric": "Rows FAIL",
+            "Value": int((df.get("Global_QC_Status", pd.Series([], dtype=str)).astype(str) == "FAIL").sum()),
+            "Status": "FAIL",
+        },
     ]
-    if "GSM_ID" in df.columns:
-        summary_rows.append({"Metric": "Duplicated GSM_ID rows", "Value": int(df["GSM_ID"].astype(str).duplicated().sum()), "Status": "FAIL if >0"})
-    if cp_excluded_df is not None:
-        summary_rows.append({"Metric": "CP rows excluded from structure-ready release", "Value": int(len(cp_excluded_df)), "Status": "REVIEW"})
 
-    review_cols = [c for c in [
-        "GSE_ID", "GSM_ID", "Global_QC_Status", "Review_Required", "Review_Level", "Review_Reason", "Release_Action",
-        "Disease_Post", "Disease_Mapped", "Tissue_Post", "Tissue_Mapped", "RNA_Source_Post", "RNA_Source_Mapped",
-        "Pert_Type", "Pert_Post", "CP_CID", "CP_CanonicalSMILES",
-    ] if c in df.columns]
-    review_queue = df.loc[df.get("Review_Required", False).astype(bool), review_cols].copy() if "Review_Required" in df.columns else pd.DataFrame(columns=review_cols)
+    if "GSM_ID" in df.columns:
+        summary_rows.append(
+            {
+                "Metric": "Duplicated GSM_ID rows",
+                "Value": int(df["GSM_ID"].astype(str).duplicated().sum()),
+                "Status": "FAIL if >0",
+            }
+        )
+
+    if cp_excluded_df is not None:
+        summary_rows.append(
+            {
+                "Metric": "CP rows excluded from structure-ready release",
+                "Value": int(len(cp_excluded_df)),
+                "Status": "REVIEW",
+            }
+        )
+
+    review_cols = [
+        c
+        for c in [
+            "GSE_ID",
+            "GSM_ID",
+            "Global_QC_Status",
+            "Review_Required",
+            "Review_Level",
+            "Review_Reason",
+            "Release_Action",
+            "Disease_Post",
+            "Disease_Mapped",
+            "Tissue_Post",
+            "Tissue_Mapped",
+            "RNA_Source_Post",
+            "RNA_Source_Mapped",
+            "Pert_Type",
+            "Pert_Post",
+            "Mapped_Pert_Dose",
+            "Mapped_Pert_Duration",
+            "CP_PubChem_Name",
+            "CP_CID",
+            "CP_CanonicalSMILES",
+            "CP_Query_Status",
+            "CP_Query_Error",
+            "CP_Query_Attempted_Term",
+            "CP_Map_Method",
+            "CP_MatchType",
+            "CP_Map_Explanation",
+        ]
+        if c in df.columns
+    ]
+
+    if "Review_Required" in df.columns:
+        review_required = (
+            df["Review_Required"]
+            .fillna(False)
+            .astype(str)
+            .str.strip()
+            .str.upper()
+        )
+        review_mask = review_required.isin(
+            {"TRUE", "1", "YES", "Y", "REVIEW", "REQUIRED"}
+        )
+        review_queue = df.loc[review_mask, review_cols].copy()
+    else:
+        review_queue = pd.DataFrame(columns=review_cols)
 
     return {
         "Final_QC_Summary": pd.DataFrame(summary_rows),
@@ -358,9 +722,149 @@ def save_mode_a_stage3_5_report(
 ) -> Path:
     review_dir = Path(review_dir)
     review_dir.mkdir(parents=True, exist_ok=True)
-    report = build_mode_a_stage3_5_report(df_final, df_simple_release, df_cp_release, cp_excluded_df)
+
+    report = build_mode_a_stage3_5_report(
+        df_final,
+        df_simple_release,
+        df_cp_release,
+        cp_excluded_df,
+    )
+
+    # ------------------------------------------------------------
+    # Add perturbation dose/duration and PubChem query-status
+    # summaries to the Stage 3.5 final QC workbook.
+    # ------------------------------------------------------------
+    pert_dose_duration_summary_df = build_stage3_5_pert_dose_duration_summary(
+        df_final=df_final,
+        df_cp_release=df_cp_release,
+    )
+
+    pert_dose_counts_df = build_stage3_5_pert_dose_value_counts(df_final)
+    pert_duration_counts_df = build_stage3_5_pert_duration_value_counts(df_final)
+
+    pubchem_query_status_df = build_stage3_5_pubchem_query_status_summary(df_final)
+    pubchem_failed_terms_df = build_stage3_5_pubchem_failed_terms(df_final)
+
+    report["pert_dose_duration"] = pert_dose_duration_summary_df
+    report["pert_dose_counts"] = pert_dose_counts_df
+    report["pert_duration_counts"] = pert_duration_counts_df
+    report["pubchem_query_status"] = pubchem_query_status_df
+    report["pubchem_failed_terms"] = pubchem_failed_terms_df
+
+    # ------------------------------------------------------------
+    # Also add compact headline metrics to Final_QC_Summary.
+    # ------------------------------------------------------------
+    def _count_approved_single(df: pd.DataFrame, col: str) -> int:
+        if df is None or df.empty or col not in df.columns:
+            return 0
+        s = df[col].fillna("").astype(str).str.strip()
+        return int((~s.isin(["", "NA", "Others"])).sum())
+
+    def _count_equal(df: pd.DataFrame, col: str, value: str) -> int:
+        if df is None or df.empty or col not in df.columns:
+            return 0
+        return int(df[col].fillna("").astype(str).str.strip().eq(value).sum())
+
+    def _count_pubchem_statuses(df: pd.DataFrame, statuses: set[str]) -> int:
+        if df is None or df.empty or "CP_Query_Status" not in df.columns:
+            return 0
+
+        work = df.copy()
+
+        if "Pert_Type" in work.columns:
+            work = work.loc[
+                work["Pert_Type"]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .str.upper()
+                .eq("CP")
+            ].copy()
+
+        return int(
+            work["CP_Query_Status"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .isin(statuses)
+            .sum()
+        )
+
+    extra_summary_rows = pd.DataFrame(
+        [
+            {
+                "Metric": "Mapped_Pert_Dose approved single values",
+                "Value": _count_approved_single(df_final, "Mapped_Pert_Dose"),
+                "Status": "INFO",
+            },
+            {
+                "Metric": "Mapped_Pert_Dose NA",
+                "Value": _count_equal(df_final, "Mapped_Pert_Dose", "NA"),
+                "Status": "INFO",
+            },
+            {
+                "Metric": "Mapped_Pert_Dose Others",
+                "Value": _count_equal(df_final, "Mapped_Pert_Dose", "Others"),
+                "Status": "REVIEW",
+            },
+            {
+                "Metric": "Mapped_Pert_Duration approved single values",
+                "Value": _count_approved_single(df_final, "Mapped_Pert_Duration"),
+                "Status": "INFO",
+            },
+            {
+                "Metric": "Mapped_Pert_Duration NA",
+                "Value": _count_equal(df_final, "Mapped_Pert_Duration", "NA"),
+                "Status": "INFO",
+            },
+            {
+                "Metric": "Mapped_Pert_Duration Others",
+                "Value": _count_equal(df_final, "Mapped_Pert_Duration", "Others"),
+                "Status": "REVIEW",
+            },
+            {
+                "Metric": "PubChem query statuses requiring rerun later",
+                "Value": _count_pubchem_statuses(
+                    df_final,
+                    {
+                        "pubchem_direct_server_busy",
+                        "pubchem_direct_request_failed",
+                        "pubchem_direct_timeout",
+                    },
+                ),
+                "Status": "RETRY",
+            },
+            {
+                "Metric": "PubChem query statuses requiring manual review",
+                "Value": _count_pubchem_statuses(
+                    df_final,
+                    {
+                        "pubchem_direct_not_found",
+                        "pubchem_direct_unverified",
+                        "pubchem_direct_no_query",
+                    },
+                ),
+                "Status": "REVIEW",
+            },
+        ]
+    )
+
+    if "Final_QC_Summary" in report:
+        report["Final_QC_Summary"] = pd.concat(
+            [report["Final_QC_Summary"], extra_summary_rows],
+            ignore_index=True,
+        )
+    else:
+        report["Final_QC_Summary"] = extra_summary_rows
+
     fp = review_dir / f"{cfg.run_version}_stage3_5_final_qc_report.xlsx"
+
     with pd.ExcelWriter(fp, engine="openpyxl") as writer:
         for sheet, d in report.items():
+            if d is None:
+                d = pd.DataFrame()
             d.to_excel(writer, sheet_name=sheet[:31], index=False)
+
+    format_excel_workbook(fp)
+
     return fp

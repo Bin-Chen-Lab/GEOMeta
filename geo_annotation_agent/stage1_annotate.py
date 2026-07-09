@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -261,6 +262,74 @@ def _reviewer_add_issue(
             reviewer_action=reviewer_action,
         )
 
+def _format_seconds(seconds: float) -> str:
+    seconds = max(float(seconds), 0.0)
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+
+    if h:
+        return f"{h:d}:{m:02d}:{s:02d}"
+    return f"{m:d}:{s:02d}"
+
+
+def _stage1_print_intro(df_input: pd.DataFrame, cfg) -> None:
+    n_chunks = int(df_input.shape[0])
+    n_gse = int(df_input["GSE_ID"].astype(str).nunique()) if "GSE_ID" in df_input.columns else 0
+
+    gsm_counts = pd.to_numeric(
+        df_input["GSM_Counts"] if "GSM_Counts" in df_input.columns else pd.Series([], dtype=float),
+        errors="coerce",
+    )
+    n_gsm_expected = int(gsm_counts.fillna(0).sum()) if len(gsm_counts) else 0
+
+    print("[Stage1] Starting LLM-guided GEO metadata annotation.", flush=True)
+    print(
+        f"[Stage1] Input summary: {n_gse:,} GSE records, "
+        f"{n_chunks:,} annotation chunks, expected GSM rows={n_gsm_expected:,}.",
+        flush=True,
+    )
+    print(
+        "[Stage1] Each chunk sends GSE/GSM metadata context to four role-specific "
+        "annotators and merges the responses into the 27-field GEOMeta schema.",
+        flush=True,
+    )
+    print(
+        "[Stage1] Progress shows completed chunks, percent complete, elapsed time, "
+        "average time per chunk, ETA, and completed GSM rows.",
+        flush=True,
+    )
+    print(
+        "[Stage1] Main outputs will be saved under artifacts/outputs/ and artifacts/ledgers/.",
+        flush=True,
+    )
+
+
+def _stage1_print_progress(
+    *,
+    done_chunks: int,
+    total_chunks: int,
+    completed_gsm_rows: int,
+    start_time: float,
+    current_gse_id: str,
+    current_chunk_id: str,
+) -> None:
+    elapsed = time.perf_counter() - start_time
+    pct = (done_chunks / total_chunks * 100.0) if total_chunks else 100.0
+    avg = elapsed / done_chunks if done_chunks else 0.0
+    eta = avg * max(total_chunks - done_chunks, 0)
+
+    print(
+        "[Stage1 progress] "
+        f"chunks={done_chunks:,}/{total_chunks:,} ({pct:.1f}%); "
+        f"completed_GSM_rows={completed_gsm_rows:,}; "
+        f"elapsed={_format_seconds(elapsed)}; "
+        f"avg={avg:.1f}s/chunk; "
+        f"ETA={_format_seconds(eta)}; "
+        f"current_GSE={current_gse_id}; "
+        f"chunk={current_chunk_id}",
+        flush=True,
+    )
 
 # -------------------------
 # Role-call wrappers
@@ -661,11 +730,18 @@ def run_stage1_raw_annotation(
         reviewer=reviewer,
     )
 
+    _stage1_print_intro(df_input, cfg)
+
+    stage1_progress_start = time.perf_counter()
+    stage1_completed_gsm_rows = 0
+    total_chunks = int(df_input.shape[0])
+
     all_rows: List[Dict[str, str]] = []
+
     chunk_logs: List[Dict[str, Any]] = []
     token_call_logs: List[Dict[str, Any]] = []
 
-    for ridx, row in df_input.iterrows():
+    for chunk_n, (ridx, row) in enumerate(df_input.iterrows(), start=1):
         gse_id = _s(row["GSE_ID"])
         gse_info = str(row["GSE_Info"])
         gsm_info = str(row["GSM_Info"])
@@ -705,6 +781,16 @@ def run_stage1_raw_annotation(
                 message="No GSM IDs could be extracted from GSM_Info.",
                 reviewer_action="manual_review",
             )
+
+            _stage1_print_progress(
+                done_chunks=chunk_n,
+                total_chunks=total_chunks,
+                completed_gsm_rows=stage1_completed_gsm_rows,
+                start_time=stage1_progress_start,
+                current_gse_id=gse_id,
+                current_chunk_id=chunk_id,
+            )
+
             continue
 
         role_rows_map: Dict[str, List[Dict[str, str]]] = {}
@@ -803,6 +889,17 @@ def run_stage1_raw_annotation(
                 "emitted_gsm_count": len(normalized_merged),
                 "role_status": json.dumps(role_status, ensure_ascii=False),
             }
+        )
+
+        stage1_completed_gsm_rows += len(normalized_merged)
+
+        _stage1_print_progress(
+            done_chunks=chunk_n,
+            total_chunks=total_chunks,
+            completed_gsm_rows=stage1_completed_gsm_rows,
+            start_time=stage1_progress_start,
+            current_gse_id=gse_id,
+            current_chunk_id=chunk_id,
         )
 
     df_out = pd.DataFrame(all_rows)
