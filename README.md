@@ -173,14 +173,13 @@ If both tests pass, the environment is ready.
 
 ## 4. Direct OpenAI API with GPT-5
 
-For the current GEOMeta release, we recommend google/gemini-3-flash-preview as the default OpenRouter model for metadata annotation, post-processing, and mapping.
 Set the following environment variables:
 
 ```bash
 export LLM_API_TYPE=openai_compatible
 export LLM_BASE_URL=https://api.openai.com/v1
 export LLM_API_KEY="your_openai_api_key"
-export LLM_MODEL=google/gemini-3-flash-preview
+export LLM_MODEL=gpt-5
 ```
 
 Do not save API keys directly in the codebase or commit them to GitHub.
@@ -190,6 +189,7 @@ Do not save API keys directly in the codebase or commit them to GitHub.
 ## 5. Other OpenAI-compatible endpoints
 
 GEOMeta can also connect to other OpenAI-compatible endpoints by changing the base URL, API key, and model name.
+For the current GEOMeta release, we recommend google/gemini-3-flash-preview as the default OpenRouter model for metadata annotation, post-processing, and mapping.
 
 ### LiteLLM proxy
 
