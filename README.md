@@ -258,8 +258,8 @@ This file should contain a column named `GSE_ID`, for example:
 
 ```text
 GSE_ID
-GSE147493
-GSE116860
+GSE130063
+GSE53779
 ```
 
 Users can replace this file with their own GSE list, while keeping the same column name.
