@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -314,6 +316,9 @@ def _stage1_print_progress(
     current_gse_id: str,
     current_chunk_id: str,
 ) -> None:
+    if not should_print_progress(done_chunks, total_chunks):
+        return
+
     elapsed = time.perf_counter() - start_time
     pct = (done_chunks / total_chunks * 100.0) if total_chunks else 100.0
     avg = elapsed / done_chunks if done_chunks else 0.0
@@ -323,13 +328,42 @@ def _stage1_print_progress(
         "[Stage1 progress] "
         f"chunks={done_chunks:,}/{total_chunks:,} ({pct:.1f}%); "
         f"completed_GSM_rows={completed_gsm_rows:,}; "
+        f"current_GSE={current_gse_id}; "
+        f"current_chunk={current_chunk_id}; "
         f"elapsed={_format_seconds(elapsed)}; "
         f"avg={avg:.1f}s/chunk; "
-        f"ETA={_format_seconds(eta)}; "
-        f"current_GSE={current_gse_id}; "
-        f"chunk={current_chunk_id}",
+        f"ETA={_format_seconds(eta)}",
         flush=True,
     )
+
+def should_print_progress(done: int, total: int) -> bool:
+    """
+    Throttle progress logging based on executable units.
+    For Stage 1, the unit is a metadata chunk.
+    """
+    try:
+        done = int(done)
+        total = int(total)
+    except Exception:
+        return True
+
+    if total <= 0 or done <= 0:
+        return False
+
+    if done == 1 or done == total:
+        return True
+
+    if total <= 20:
+        return True
+
+    if total <= 100:
+        return done % 5 == 0
+
+    if total <= 500:
+        return done % 10 == 0
+
+    return done % 50 == 0
+
 
 # -------------------------
 # Role-call wrappers
@@ -587,6 +621,235 @@ def _call_role(
     txt = llm.chat(messages)
     return _safe_json_loads_with_simple_repair(txt)
 
+def _stage1_role_workers_from_env(default: int = 1) -> int:
+    """
+    Number of parallel Stage 1 role calls per chunk.
+
+    STAGE1_ROLE_WORKERS=1 preserves the original sequential behavior.
+    STAGE1_ROLE_WORKERS=2 or 4 runs independent role annotators concurrently.
+    """
+    raw = os.environ.get("STAGE1_ROLE_WORKERS", str(default)).strip()
+    try:
+        n = int(raw)
+    except Exception:
+        n = int(default)
+
+    # Stage 1 currently has four role annotators.
+    return max(1, min(n, 4))
+
+def _stage1_role_start_stagger_from_env(default: float = 0.0) -> float:
+    """
+    Optional small delay to stagger parallel Stage 1 role calls.
+
+    This helps avoid sending all role requests at exactly the same time when
+    STAGE1_ROLE_WORKERS > 1. It does not change prompts, schema, or annotation logic.
+    """
+    raw = os.environ.get("STAGE1_ROLE_START_STAGGER_SECONDS", str(default)).strip()
+    try:
+        value = float(raw)
+    except Exception:
+        value = float(default)
+
+    return max(0.0, value)
+
+def _stage1_role_max_attempts_from_env(default: int = 3) -> int:
+    """
+    Maximum attempts for each Stage 1 role call.
+
+    This is a role-level retry. It retries malformed JSON, transient API
+    failures, and other role-call exceptions before falling back to NA rows.
+    Keep the default conservative: 3 total attempts.
+    """
+    raw = os.environ.get("STAGE1_ROLE_MAX_ATTEMPTS", str(default)).strip()
+    try:
+        n = int(raw)
+    except Exception:
+        n = int(default)
+
+    return max(1, min(n, 5))
+
+
+def _stage1_role_retry_sleep_seconds_from_env(default: float = 5.0) -> float:
+    """
+    Base sleep time between Stage 1 role retries.
+
+    The actual sleep uses a small linear backoff:
+    retry_sleep_seconds * attempt_number.
+    """
+    raw = os.environ.get("STAGE1_ROLE_RETRY_SLEEP_SECONDS", str(default)).strip()
+    try:
+        value = float(raw)
+    except Exception:
+        value = float(default)
+
+    return max(0.0, value)
+
+
+def _call_role_with_retries(
+    *,
+    llm: BaseLLM,
+    cfg,
+    role_name: str,
+    role_prompt_text: str,
+    gse_id: str,
+    gse_info: str,
+    gsm_info: str,
+    expected_gsm_ids: List[str],
+    chunk_id: str,
+    token_logs: List[Dict[str, Any]] | None = None,
+    max_attempts: int | None = None,
+    retry_sleep_seconds: float | None = None,
+) -> Dict[str, Any]:
+    """
+    Call one Stage 1 role with bounded retries.
+
+    This prevents one malformed JSON response from immediately becoming NA
+    fallback rows. If all attempts fail, the caller still handles the failure
+    through the existing stage1_role_failure reviewer path.
+    """
+    if max_attempts is None:
+        max_attempts = _stage1_role_max_attempts_from_env(default=3)
+    if retry_sleep_seconds is None:
+        retry_sleep_seconds = _stage1_role_retry_sleep_seconds_from_env(default=5.0)
+
+    max_attempts = max(1, int(max_attempts))
+    retry_sleep_seconds = max(0.0, float(retry_sleep_seconds))
+
+    errors: List[str] = []
+
+    for attempt in range(1, max_attempts + 1):
+        attempt_token_logs: List[Dict[str, Any]] = []
+
+        try:
+            out = _call_role(
+                llm=llm,
+                cfg=cfg,
+                role_name=role_name,
+                role_prompt_text=role_prompt_text,
+                gse_id=gse_id,
+                gse_info=gse_info,
+                gsm_info=gsm_info,
+                expected_gsm_ids=expected_gsm_ids,
+                chunk_id=chunk_id,
+                token_logs=attempt_token_logs,
+            )
+
+            if token_logs is not None:
+                for row in attempt_token_logs:
+                    row["Stage1_Role_Attempt"] = attempt
+                    row["Stage1_Role_Attempt_Status"] = "success"
+                token_logs.extend(attempt_token_logs)
+
+            if attempt > 1:
+                print(
+                    f"[Stage1 RETRY OK] GSE={gse_id} chunk={chunk_id} "
+                    f"role={role_name} succeeded on attempt {attempt}/{max_attempts}.",
+                    flush=True,
+                )
+
+            return out
+
+        except Exception as e:
+            err = repr(e)
+            errors.append(err)
+
+            if token_logs is not None:
+                for row in attempt_token_logs:
+                    row["Stage1_Role_Attempt"] = attempt
+                    row["Stage1_Role_Attempt_Status"] = "failed"
+                    row["Stage1_Role_Attempt_Error"] = err
+                token_logs.extend(attempt_token_logs)
+
+            if attempt >= max_attempts:
+                raise RuntimeError(
+                    f"Stage1 role call failed after {max_attempts} attempt(s): "
+                    f"GSE={gse_id}; chunk={chunk_id}; role={role_name}; "
+                    f"last_error={err}; all_errors={errors}"
+                ) from e
+
+            sleep_seconds = retry_sleep_seconds * attempt
+            print(
+                f"[Stage1 RETRY] GSE={gse_id} chunk={chunk_id} role={role_name} "
+                f"failed attempt {attempt}/{max_attempts}: {err}. "
+                f"Retrying in {sleep_seconds:.1f}s.",
+                flush=True,
+            )
+
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
+
+    raise RuntimeError(
+        f"Stage1 role call failed unexpectedly without returning or raising: "
+        f"GSE={gse_id}; chunk={chunk_id}; role={role_name}; errors={errors}"
+    )
+
+def _make_role_failure_rows(
+    role_name: str,
+    expected_gsm_ids: List[str],
+    gse_id: str,
+) -> List[Dict[str, str]]:
+    """
+    Hard fallback for one failed role.
+    Preserves GSM rows and fills only that role's assigned fields with NA.
+    """
+    return [
+        {
+            f: (
+                "NA"
+                if f not in {"GSM_ID", "GSE_ID"}
+                else (gsm_id if f == "GSM_ID" else gse_id)
+            )
+            for f in ROLE_FIELDS[role_name]
+        }
+        for gsm_id in expected_gsm_ids
+    ]
+
+
+def _call_role_worker(
+    *,
+    cfg,
+    role_name: str,
+    role_prompt_text: str,
+    gse_id: str,
+    gse_info: str,
+    gsm_info: str,
+    expected_gsm_ids: List[str],
+    chunk_id: str,
+    role_index: int = 0,
+    start_stagger_seconds: float = 0.0,
+    max_attempts: int | None = None,
+    retry_sleep_seconds: float | None = None,
+) -> tuple[str, Dict[str, Any], List[Dict[str, Any]]]:
+    """
+    Worker wrapper for one role call.
+
+    A separate LLM client is created inside each worker to avoid sharing one
+    OpenAI-compatible client across threads. The worker uses the same bounded
+    retry policy as sequential Stage 1.
+    """
+    if start_stagger_seconds > 0 and role_index > 0:
+        time.sleep(float(start_stagger_seconds) * int(role_index))
+
+    local_llm = make_llm_from_config(cfg)
+    local_token_logs: List[Dict[str, Any]] = []
+
+    raw_out = _call_role_with_retries(
+        llm=local_llm,
+        cfg=cfg,
+        role_name=role_name,
+        role_prompt_text=role_prompt_text,
+        gse_id=gse_id,
+        gse_info=gse_info,
+        gsm_info=gsm_info,
+        expected_gsm_ids=expected_gsm_ids,
+        chunk_id=chunk_id,
+        token_logs=local_token_logs,
+        max_attempts=max_attempts,
+        retry_sleep_seconds=retry_sleep_seconds,
+    )
+
+    return role_name, raw_out, local_token_logs
+
 def _normalize_role_rows(
     role_name: str,
     role_output: Dict[str, Any],
@@ -741,6 +1004,27 @@ def run_stage1_raw_annotation(
     chunk_logs: List[Dict[str, Any]] = []
     token_call_logs: List[Dict[str, Any]] = []
 
+    stage1_role_workers = _stage1_role_workers_from_env(default=1)
+    stage1_role_start_stagger_seconds = _stage1_role_start_stagger_from_env(default=0.0)
+    stage1_role_max_attempts = _stage1_role_max_attempts_from_env(default=3)
+    stage1_role_retry_sleep_seconds = _stage1_role_retry_sleep_seconds_from_env(default=5.0)
+
+    print(
+        f"[Stage1] Role retry policy: "
+        f"STAGE1_ROLE_MAX_ATTEMPTS={stage1_role_max_attempts}; "
+        f"STAGE1_ROLE_RETRY_SLEEP_SECONDS={stage1_role_retry_sleep_seconds}.",
+        flush=True,
+    )
+
+    if stage1_role_workers > 1:
+        print(
+            f"[Stage1] Parallel role execution enabled: "
+            f"STAGE1_ROLE_WORKERS={stage1_role_workers}; "
+            f"STAGE1_ROLE_START_STAGGER_SECONDS={stage1_role_start_stagger_seconds}. "
+            "Each metadata chunk still preserves GSM order and final schema merging.",
+            flush=True,
+        )
+
     for chunk_n, (ridx, row) in enumerate(df_input.iterrows(), start=1):
         gse_id = _s(row["GSE_ID"])
         gse_info = str(row["GSE_Info"])
@@ -796,63 +1080,108 @@ def run_stage1_raw_annotation(
         role_rows_map: Dict[str, List[Dict[str, str]]] = {}
         role_status = {}
 
-        for role_name, prompt_text in role_prompt_texts.items():
-            try:
-                raw_out = _call_role(
-                    llm=llm,
-                    cfg=cfg,
-                    role_name=role_name,
-                    role_prompt_text=prompt_text,
-                    gse_id=gse_id,
-                    gse_info=gse_info,
-                    gsm_info=gsm_info,
-                    expected_gsm_ids=expected_gsm_ids,
-                    chunk_id=chunk_id,
-                    token_logs=token_call_logs,
-                )
+        def handle_role_failure(role_name: str, err: Exception) -> None:
+            print(f"[Stage1 ERROR] GSE={gse_id} role={role_name}: {repr(err)}", flush=True)
 
-                role_rows = _normalize_role_rows(
-                    role_name=role_name,
-                    role_output=raw_out,
-                    expected_gsm_ids=expected_gsm_ids,
-                    gse_id=gse_id,
-                    reviewer=reviewer,
-                )
+            role_rows_map[role_name] = _make_role_failure_rows(
+                role_name=role_name,
+                expected_gsm_ids=expected_gsm_ids,
+                gse_id=gse_id,
+            )
 
-                role_rows_map[role_name] = role_rows
-                role_status[role_name] = "ok"
+            role_status[role_name] = f"failed: {repr(err)}"
 
-            except Exception as e:
-                print(f"[Stage1 ERROR] GSE={gse_id} role={role_name}: {repr(e)}")
+            _reviewer_add_issue(
+                reviewer=reviewer,
+                gsm_id="GSE_LEVEL",
+                gse_id=gse_id,
+                issue_type="stage1_role_failure",
+                field_name=role_name,
+                severity="high",
+                message=(
+                    f"Role {role_name} failed; emitted NA fallback rows. "
+                    f"Error: {repr(err)}"
+                ),
+                reviewer_action="manual_review",
+            )
 
-                # Hard fallback: create NA rows for that role only
-                role_rows_map[role_name] = [
-                    {
-                        f: (
-                            "NA"
-                            if f not in {"GSM_ID", "GSE_ID"}
-                            else (gsm_id if f == "GSM_ID" else gse_id)
+        if stage1_role_workers <= 1:
+            # Original sequential behavior.
+            for role_name, prompt_text in role_prompt_texts.items():
+                try:
+                    raw_out = _call_role_with_retries(
+                        llm=llm,
+                        cfg=cfg,
+                        role_name=role_name,
+                        role_prompt_text=prompt_text,
+                        gse_id=gse_id,
+                        gse_info=gse_info,
+                        gsm_info=gsm_info,
+                        expected_gsm_ids=expected_gsm_ids,
+                        chunk_id=chunk_id,
+                        token_logs=token_call_logs,
+                        max_attempts=stage1_role_max_attempts,
+                        retry_sleep_seconds=stage1_role_retry_sleep_seconds,
+                    )
+
+                    role_rows = _normalize_role_rows(
+                        role_name=role_name,
+                        role_output=raw_out,
+                        expected_gsm_ids=expected_gsm_ids,
+                        gse_id=gse_id,
+                        reviewer=reviewer,
+                    )
+
+                    role_rows_map[role_name] = role_rows
+                    role_status[role_name] = "ok"
+
+                except Exception as e:
+                    handle_role_failure(role_name, e)
+
+        else:
+            # Parallel role execution within the same chunk.
+            max_workers = min(stage1_role_workers, len(role_prompt_texts))
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_role = {
+                    executor.submit(
+                        _call_role_worker,
+                        cfg=cfg,
+                        role_name=role_name,
+                        role_prompt_text=prompt_text,
+                        gse_id=gse_id,
+                        gse_info=gse_info,
+                        gsm_info=gsm_info,
+                        expected_gsm_ids=expected_gsm_ids,
+                        chunk_id=chunk_id,
+                        role_index=role_index,
+                        start_stagger_seconds=stage1_role_start_stagger_seconds,
+                        max_attempts=stage1_role_max_attempts,
+                        retry_sleep_seconds=stage1_role_retry_sleep_seconds,
+                    ): role_name
+                    for role_index, (role_name, prompt_text) in enumerate(role_prompt_texts.items())
+                }
+
+                for future in as_completed(future_to_role):
+                    role_name = future_to_role[future]
+
+                    try:
+                        returned_role_name, raw_out, local_token_logs = future.result()
+                        token_call_logs.extend(local_token_logs)
+
+                        role_rows = _normalize_role_rows(
+                            role_name=returned_role_name,
+                            role_output=raw_out,
+                            expected_gsm_ids=expected_gsm_ids,
+                            gse_id=gse_id,
+                            reviewer=reviewer,
                         )
-                        for f in ROLE_FIELDS[role_name]
-                    }
-                    for gsm_id in expected_gsm_ids
-                ]
 
-                role_status[role_name] = f"failed: {repr(e)}"
+                        role_rows_map[returned_role_name] = role_rows
+                        role_status[returned_role_name] = "ok"
 
-                _reviewer_add_issue(
-                    reviewer=reviewer,
-                    gsm_id="GSE_LEVEL",
-                    gse_id=gse_id,
-                    issue_type="stage1_role_failure",
-                    field_name=role_name,
-                    severity="high",
-                    message=(
-                        f"Role {role_name} failed; emitted NA fallback rows. "
-                        f"Error: {repr(e)}"
-                    ),
-                    reviewer_action="manual_review",
-                )
+                    except Exception as e:
+                        handle_role_failure(role_name, e)
 
         if role_status and all(str(v).startswith("failed:") for v in role_status.values()):
             raise RuntimeError(
@@ -983,7 +1312,6 @@ def run_stage1_raw_annotation(
         print("Stage1 DONE rows:", df_out.shape)
 
     return df_out
-
 
 # Backward-compatible alias for current downstream imports
 def run_stage1_raw_annotation_v2(

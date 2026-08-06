@@ -544,7 +544,18 @@ def map_pert_dose_for_release(x: Any) -> str:
     Final downstream-ready dose field.
 
     Keep only single-dose entries with approved units:
-      µM, nM, mM, ng/ml, µg/ml, mg
+      Molar concentration:
+        pM, nM, µM, mM, M
+        nmol/L, µmol/L, mmol/L
+
+      Mass concentration:
+        ng/ml, µg/ml, mg/ml
+
+      Body-weight-normalized dose:
+        ng/kg, µg/kg, mg/kg, g/kg
+
+      Absolute mass:
+        ng, µg, mg
 
     Return:
       NA      = no dose information
@@ -554,37 +565,76 @@ def map_pert_dose_for_release(x: Any) -> str:
     if not v:
         return "NA"
 
-    # Multiple numeric values usually indicate dose ranges or multiple doses:
-    # e.g., 1, 5, 10 µM; 5-10 µM; 1 and 10 µM.
+    # Multiple numeric values usually indicate dose ranges, dose series,
+    # or combination treatments, e.g.:
+    #   1, 5, 10 µM
+    #   5-10 µM
+    #   1 and 10 µM
+    #   50 mg/kg/day + 5 mg/kg/day
     nums = re.findall(r"\d+(?:\.\d+)?", v)
     if len(nums) != 1:
         return "Others"
 
-    # Allow common micro variants but standardize output to µM / µg/ml.
+    # Keep only one numeric value followed by one approved unit.
+    # Longer slash units must be listed before shorter absolute-mass units
+    # so that mg/ml and mg/kg are not confused with bare mg.
+    unit_pattern = (
+        r"nmol/L|nmol/l|µmol/L|µmol/l|umol/L|umol/l|mmol/L|mmol/l|"
+        r"ng/ml|ng/mL|µg/ml|µg/mL|ug/ml|ug/mL|mg/ml|mg/mL|"
+        r"ng/kg|µg/kg|ug/kg|mg/kg|g/kg|"
+        r"pM|pm|nM|nm|µM|µm|uM|um|mM|mm|M|"
+        r"ng|µg|ug|mg"
+    )
+
     m = re.fullmatch(
-        r"\s*(\d+(?:\.\d+)?)\s*(µm|um|nm|mm|ng/ml|ng/mL|µg/ml|µg/mL|ug/ml|ug/mL|mg)\s*",
-        v,
-        flags=re.I,
+    rf"\s*(\d+(?:\.\d+)?)\s*({unit_pattern})\s*",
+    v,
+    flags=re.I,
     )
 
     if not m:
         return "Others"
 
     value = m.group(1)
-    unit_raw = m.group(2).replace("μ", "µ").lower()
+    unit_raw = m.group(2).replace("μ", "µ")
+    unit_key = unit_raw.lower()
 
     unit_map = {
+        # Molar concentration
+        "pm": "pM",
+        "nm": "nM",
         "µm": "µM",
         "um": "µM",
-        "nm": "nM",
         "mm": "mM",
+        "m": "M",
+
+        # mol/L-style concentration
+        "nmol/l": "nmol/L",
+        "µmol/l": "µmol/L",
+        "umol/l": "µmol/L",
+        "mmol/l": "mmol/L",
+
+        # Mass concentration
         "ng/ml": "ng/ml",
         "µg/ml": "µg/ml",
         "ug/ml": "µg/ml",
+        "mg/ml": "mg/ml",
+
+        # Body-weight-normalized dose
+        "ng/kg": "ng/kg",
+        "µg/kg": "µg/kg",
+        "ug/kg": "µg/kg",
+        "mg/kg": "mg/kg",
+        "g/kg": "g/kg",
+
+        # Absolute mass
+        "ng": "ng",
+        "µg": "µg",
+        "ug": "µg",
         "mg": "mg",
     }
 
-    unit = unit_map.get(unit_raw)
+    unit = unit_map.get(unit_key)
     if not unit:
         return "Others"
 
@@ -1660,17 +1710,93 @@ CP_LLM_SYSTEM = (
     "- If the term is not a chemical perturbation or remains ambiguous, return query=NA.\n"
 )
 
-
 # -------------------------
 # PubChem helpers
 # -------------------------
+# PubChem asks programmatic users to stay below 5 requests/second.
+# A 0.30 s minimum interval keeps the workflow below both the second-level
+# and minute-level request caps, even when title/SMILES/synonym lookups are
+# performed for many terms.
+PUBCHEM_MIN_INTERVAL_SEC = 0.30
+PUBCHEM_YELLOW_SLEEP_SEC = 2.0
+PUBCHEM_RED_SLEEP_SEC = 60.0
+PUBCHEM_REQUEST_HEADERS = {
+    "User-Agent": "GEOMeta/1.0 PubChem-rate-limited-stage3-mapping"
+}
+
+_PUBCHEM_SESSION = requests.Session()
+_PUBCHEM_LAST_REQUEST_TS = 0.0
+
+
+def _pubchem_wait_before_request() -> None:
+    """Apply a process-level hard delay before every PubChem request."""
+    global _PUBCHEM_LAST_REQUEST_TS
+
+    now = time.monotonic()
+    elapsed = now - _PUBCHEM_LAST_REQUEST_TS
+    wait = PUBCHEM_MIN_INTERVAL_SEC - elapsed
+
+    if wait > 0:
+        time.sleep(wait)
+
+    _PUBCHEM_LAST_REQUEST_TS = time.monotonic()
+
+
+def _pubchem_retry_after_seconds(headers: Any) -> Optional[float]:
+    """Read Retry-After header when PubChem/HTTP gateway provides one."""
+    try:
+        raw = headers.get("Retry-After", "")
+    except Exception:
+        return None
+
+    raw = str(raw).strip()
+    if not raw:
+        return None
+
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return None
+
+
+def _pubchem_throttle_state(headers: Any) -> str:
+    """Return Green, Yellow, Red, or Unknown from X-Throttling-Control."""
+    try:
+        raw = str(headers.get("X-Throttling-Control", ""))
+    except Exception:
+        return "Unknown"
+
+    low = raw.lower()
+    if "red" in low:
+        return "Red"
+    if "yellow" in low:
+        return "Yellow"
+    if "green" in low:
+        return "Green"
+    return "Unknown"
+
+
+def _pubchem_header_delay_seconds(headers: Any) -> float:
+    """Convert PubChem throttling headers into a conservative client-side pause."""
+    retry_after = _pubchem_retry_after_seconds(headers)
+    if retry_after is not None:
+        return retry_after
+
+    throttle_state = _pubchem_throttle_state(headers)
+    if throttle_state == "Red":
+        return PUBCHEM_RED_SLEEP_SEC
+    if throttle_state == "Yellow":
+        return PUBCHEM_YELLOW_SLEEP_SEC
+    return 0.0
+
+
 def _request_json_with_status(
     url: str,
     timeout: int = 20,
-    max_retries: int = 3,
+    max_retries: int = 5,
 ) -> Tuple[Optional[Dict[str, Any]], str, str]:
     """
-    PubChem JSON request with retry and explicit status.
+    PubChem JSON request with hard throttling, retry, and explicit status.
 
     Returns:
       data, status, error
@@ -1682,23 +1808,44 @@ def _request_json_with_status(
       request_failed
       timeout
       invalid_json
+
+    Rate-limit behavior:
+      - wait >= PUBCHEM_MIN_INTERVAL_SEC before every request
+      - inspect X-Throttling-Control after every response
+      - slow down on Yellow and pause on Red
+      - honor Retry-After when provided
     """
     last_error = ""
 
+    # PubChem REST requests time out at about 30 s server-side.
+    timeout = min(int(timeout), 30)
+
     for attempt in range(1, max_retries + 1):
         try:
-            r = requests.get(url, timeout=timeout)
+            _pubchem_wait_before_request()
+
+            r = _PUBCHEM_SESSION.get(
+                url,
+                timeout=timeout,
+                headers=PUBCHEM_REQUEST_HEADERS,
+            )
             text = r.text or ""
+            throttle_state = _pubchem_throttle_state(r.headers)
+            header_delay = _pubchem_header_delay_seconds(r.headers)
 
             if r.status_code == 200:
+                if header_delay > 0:
+                    time.sleep(header_delay)
                 try:
                     return r.json(), "ok", ""
                 except ValueError as e:
-                    last_error = f"invalid_json: {e}"
+                    last_error = f"invalid_json: {e}; throttling={throttle_state}"
                     return None, "invalid_json", last_error
 
             if r.status_code == 404:
-                return None, "not_found", "HTTP 404 not found"
+                if header_delay > 0:
+                    time.sleep(header_delay)
+                return None, "not_found", f"HTTP 404 not found; throttling={throttle_state}"
 
             if (
                 r.status_code in {429, 500, 502, 503, 504}
@@ -1706,15 +1853,15 @@ def _request_json_with_status(
                 or "too many requests" in text.lower()
                 or "server busy" in text.lower()
             ):
-                last_error = f"HTTP {r.status_code}: {text[:300]}"
+                last_error = f"HTTP {r.status_code}; throttling={throttle_state}; body={text[:300]}"
                 if attempt < max_retries:
-                    time.sleep(0.75 * attempt)
+                    time.sleep(max(0.75 * attempt, header_delay))
                     continue
                 return None, "server_busy", last_error
 
-            last_error = f"HTTP {r.status_code}: {text[:300]}"
+            last_error = f"HTTP {r.status_code}; throttling={throttle_state}; body={text[:300]}"
             if attempt < max_retries:
-                time.sleep(0.75 * attempt)
+                time.sleep(max(0.75 * attempt, header_delay))
                 continue
             return None, "request_failed", last_error
 
@@ -1734,7 +1881,7 @@ def _request_json_with_status(
 
     return None, "request_failed", last_error
 
-def _request_json(url: str, timeout: int = 20, max_retries: int = 3):
+def _request_json(url: str, timeout: int = 20, max_retries: int = 5):
     """
     Backward-compatible wrapper for older helper calls.
     Existing title/smiles/synonym helpers can keep using _request_json().
@@ -1750,7 +1897,7 @@ def _request_json(url: str, timeout: int = 20, max_retries: int = 3):
 def pubchem_cid_lookup_from_name(
     term: str,
     timeout: int = 20,
-    max_retries: int = 3,
+    max_retries: int = 5,
 ) -> Tuple[Optional[str], str, str]:
     """
     PubChem name-to-CID lookup with explicit status.
@@ -1792,7 +1939,7 @@ def pubchem_cid_from_name(term: str, timeout: int = 20) -> Optional[str]:
     """
     Backward-compatible CID helper.
     """
-    cid, _, _ = pubchem_cid_lookup_from_name(term, timeout=timeout, max_retries=3)
+    cid, _, _ = pubchem_cid_lookup_from_name(term, timeout=timeout, max_retries=5)
     return cid
 
 
@@ -1881,6 +2028,30 @@ def pubchem_title_and_smiles_from_cid(cid: str, timeout: int = 20) -> Dict[str, 
         fallback["CanonicalSMILES"] = pubchem_record_smiles_from_cid(cid, timeout=timeout)
         return fallback
 
+def pubchem_synonyms_for_cid(cid: str, timeout: int = 20, max_synonyms: int = 500) -> set[str]:
+    """Return lower-case PubChem synonyms for a CID using the throttled request helper."""
+    cid = normalize_pubchem_cid(cid)
+    if not cid:
+        return set()
+
+    url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/synonyms/JSON"
+    data = _request_json(url, timeout=timeout)
+
+    try:
+        info = data.get("InformationList", {}).get("Information", [])
+        if not info:
+            return set()
+        syns = info[0].get("Synonym", [])
+    except Exception:
+        return set()
+
+    out = set()
+    for syn in syns[:max_synonyms]:
+        v = str(syn).strip().lower()
+        if v:
+            out.add(v)
+
+    return out
 
 def resolve_cp_term_with_pubchem(query_term: str, timeout: int = 20) -> Dict[str, str]:
     """
@@ -1917,9 +2088,9 @@ def resolve_cp_term_with_pubchem(query_term: str, timeout: int = 20) -> Dict[str
         }
 
     cid, cid_status, cid_error = pubchem_cid_lookup_from_name(
-        raw,
-        timeout=timeout,
-        max_retries=3,
+    raw,
+    timeout=timeout,
+    max_retries=5,
     )
 
     if not cid:

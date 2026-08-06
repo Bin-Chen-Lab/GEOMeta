@@ -28,6 +28,21 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+def parse_qa3_target_fields(text):
+    if text is None:
+        return None
+
+    text = str(text).strip()
+    if not text or text.upper() in {"ALL", "*"}:
+        return None
+
+    fields = [
+        x.strip()
+        for x in text.replace(";", ",").replace("|", ",").split(",")
+        if x.strip()
+    ]
+    return tuple(dict.fromkeys(fields))
+
 from stage1_evidence_verifier import (
     EvidenceVerifierConfig,
     read_table,
@@ -58,6 +73,19 @@ def main() -> None:
     parser.add_argument("--gse-col", default="GSE_ID")
     parser.add_argument("--gsm-col", default="GSM_ID")
     parser.add_argument("--max-tasks", type=int, default=None)
+
+    parser.add_argument(
+        "--qa3-target-fields",
+        "--stage1-qa3-fields",
+        dest="qa3_target_fields",
+        default="GSE_Pert,GSM_Pert,RNA_Source,Tissue",
+        help=(
+            "Comma-separated target fields for field-targeted QA3. "
+            "Default: GSE_Pert,GSM_Pert,RNA_Source,Tissue. "
+            "Use ALL to disable field filtering."
+        ),
+    )
+
     parser.add_argument(
         "--stage1-qa3-mode",
         "--qa3-mode",
@@ -72,10 +100,9 @@ def main() -> None:
     parser.add_argument("--allow-nonempty-overwrite", action="store_true")
     parser.add_argument("--skip-sampling-qc", action="store_true")
     parser.add_argument(
-        "--include-stage1-qa2-low",
-        "--include-stage1-6-low",
-        dest="include_stage1_qa2_low",
-        action="store_true",
+    "--include-stage1-qa2-low",
+    dest="include_stage1_qa2_low",
+    action="store_true",
     )
     args = parser.parse_args()
 
@@ -93,12 +120,21 @@ def main() -> None:
 
     if args.max_tasks is not None:
         qa3_max_tasks = args.max_tasks
-    elif qa3_mode == "full":
-        qa3_max_tasks = 150
     elif qa3_mode == "off":
         qa3_max_tasks = 0
     else:
-        qa3_max_tasks = 50
+        qa3_max_tasks = None
+
+    qa3_target_fields = parse_qa3_target_fields(args.qa3_target_fields)
+
+    print(
+        "[Stage1 QA3] Field-targeted QA3 target fields: "
+        + ("ALL" if qa3_target_fields is None else ", ".join(qa3_target_fields))
+    )
+    print(
+        "[Stage1 QA3] Max tasks: "
+        + ("None / uncapped after field filtering" if qa3_max_tasks is None else str(qa3_max_tasks))
+    )
 
     cfg = EvidenceVerifierConfig(
         gse_col=args.gse_col,
@@ -111,6 +147,8 @@ def main() -> None:
         allow_nonempty_overwrite=args.allow_nonempty_overwrite,
         include_sampling_qc=(qa3_mode == "full") and not args.skip_sampling_qc,
         include_stage1_qa2_low=args.include_stage1_qa2_low,
+        qa3_target_fields=qa3_target_fields,
+        fields_for_sampling_qc=qa3_target_fields or ("GSE_Pert", "GSM_Pert", "RNA_Source", "Tissue"),
     )
 
     _, outputs = run_stage1_qa3_verification_pipeline(

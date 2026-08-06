@@ -29,7 +29,11 @@ from geo_annotation_agent.excel_report_utils import (
 
 from within_gse_consistency_audit import build_audit_and_corrections, AuditConfig, write_excel
 from stage1_cross_agent_validation import validate_cross_agent, ValidationConfig, write_outputs
-from stage1_evidence_verifier import EvidenceVerifierConfig, run_stage1_qa3_verification_pipeline
+from stage1_evidence_verifier import (
+    EvidenceVerifierConfig,
+    STAGE1_FIELDS,
+    run_stage1_qa3_verification_pipeline,
+)
 from stage1_provenance_audit import write_stage1_provenance_workbook
 
 
@@ -76,6 +80,150 @@ def read_gse_file(path: Path) -> List[str]:
     values = df["GSE_ID"].tolist() if "GSE_ID" in df.columns else df.iloc[:, 0].tolist()
     return clean_gse_ids(values)
 
+def parse_qa3_target_fields(text):
+    if text is None:
+        return None
+
+    text = str(text).strip()
+    if not text or text.upper() in {"ALL", "*"}:
+        return None
+
+    fields = [
+        x.strip()
+        for x in text.replace(";", ",").replace("|", ",").split(",")
+        if x.strip()
+    ]
+    return tuple(dict.fromkeys(fields))
+
+def _df_rows(df) -> int:
+    try:
+        return int(df.shape[0])
+    except Exception:
+        return 0
+
+
+def _df_unique(df, col: str) -> int:
+    try:
+        if df is None or df.empty or col not in df.columns:
+            return 0
+        return int(df[col].astype(str).str.strip().nunique())
+    except Exception:
+        return 0
+
+
+def _yes_count(df, col: str) -> int:
+    if df is None or df.empty or col not in df.columns:
+        return 0
+    vals = df[col].fillna("").astype(str).str.strip().str.upper()
+    return int(vals.isin({"YES", "TRUE", "1", "Y"}).sum())
+
+
+def _count_line(df, col: str, preferred_order=None) -> str:
+    if df is None or df.empty or col not in df.columns:
+        return "NA"
+
+    vc = df[col].fillna("").astype(str).str.strip()
+    vc = vc.replace("", "Blank").value_counts(dropna=False).to_dict()
+
+    if preferred_order:
+        parts = []
+        used = set()
+        for key in preferred_order:
+            parts.append(f"{key}={int(vc.get(key, 0))}")
+            used.add(key)
+        for key, value in vc.items():
+            if key not in used:
+                parts.append(f"{key}={int(value)}")
+        return ", ".join(parts)
+
+    return ", ".join(f"{k}={int(v)}" for k, v in vc.items())
+
+
+def print_stage1_qa1_log_summary(
+    df_stage1_raw_with_info,
+    qa1_summary_df,
+    qa1_candidates_df,
+    qa1_review_df,
+) -> None:
+    checked_fields = [f for f in STAGE1_FIELDS if f in df_stage1_raw_with_info.columns]
+
+    print(
+        "[Stage1 QA1] Summary: checked "
+        f"{len(checked_fields):,} Stage 1 fields across "
+        f"{_df_rows(df_stage1_raw_with_info):,} GSM rows and "
+        f"{_df_unique(df_stage1_raw_with_info, 'GSE_ID'):,} GSEs.",
+        flush=True,
+    )
+
+    print(
+        "[Stage1 QA1] GSE-field summary rows: "
+        f"{_df_rows(qa1_summary_df):,}.",
+        flush=True,
+    )
+
+    print(
+        "[Stage1 QA1] High-confidence correction candidates: "
+        f"{_df_rows(qa1_candidates_df):,}.",
+        flush=True,
+    )
+
+    print(
+        "[Stage1 QA1] Human-review queue rows: "
+        f"{_df_rows(qa1_review_df):,}.",
+        flush=True,
+    )
+
+    if qa1_review_df is not None and not qa1_review_df.empty:
+        if "Issue_Type" in qa1_review_df.columns:
+            print(
+                "[Stage1 QA1] Human-review issue types: "
+                + _count_line(qa1_review_df, "Issue_Type"),
+                flush=True,
+            )
+        if "Review_Priority" in qa1_review_df.columns:
+            print(
+                "[Stage1 QA1] Human-review priorities: "
+                + _count_line(qa1_review_df, "Review_Priority"),
+                flush=True,
+            )
+
+
+def print_stage1_qa2_log_summary(qa2_issues_df) -> None:
+    print(
+        "[Stage1 QA2] Summary: cross-agent/cross-field issues found: "
+        f"{_df_rows(qa2_issues_df):,}.",
+        flush=True,
+    )
+
+    if qa2_issues_df is None or qa2_issues_df.empty:
+        print("[Stage1 QA2] No QA2 issues found.", flush=True)
+        return
+
+    if "Severity" in qa2_issues_df.columns:
+        print(
+            "[Stage1 QA2] Severity counts: "
+            + _count_line(qa2_issues_df, "Severity", preferred_order=["High", "Medium", "Low"]),
+            flush=True,
+        )
+
+    print(
+        "[Stage1 QA2] Needs_LLM_Review=YES: "
+        f"{_yes_count(qa2_issues_df, 'Needs_LLM_Review'):,}.",
+        flush=True,
+    )
+
+    print(
+        "[Stage1 QA2] Needs_Human_Review=YES: "
+        f"{_yes_count(qa2_issues_df, 'Needs_Human_Review'):,}.",
+        flush=True,
+    )
+
+    if "Rule_ID" in qa2_issues_df.columns:
+        print(
+            "[Stage1 QA2] Rule counts: "
+            + _count_line(qa2_issues_df, "Rule_ID"),
+            flush=True,
+        )
 
 def write_gse_input_file(gse_ids: List[str], out_path: Path) -> Path:
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -132,6 +280,123 @@ def read_gse_input_table(path: Path) -> pd.DataFrame:
 
     return df
 
+def _reconstruct_stage0_long_text_columns(
+    df: pd.DataFrame,
+    long_text_columns: tuple[str, ...] = ("GSE_Info", "GSM_Info"),
+) -> pd.DataFrame:
+    """
+    Reconstruct full Stage0 long-text columns from Excel review-copy part columns.
+
+    Stage0 Excel review files may contain columns such as:
+      GSE_Info_Part_1, GSE_Info_Part_2, ...
+      GSM_Info_Part_1, GSM_Info_Part_2, ...
+
+    The authoritative cached file should be parquet when possible, but this helper
+    allows .xlsx review copies to be used safely as well.
+    """
+    out = df.copy()
+
+    for base_col in long_text_columns:
+        part_cols = []
+
+        for col in out.columns:
+            m = re.fullmatch(rf"{re.escape(base_col)}_Part_(\d+)", str(col))
+            if m:
+                part_cols.append((int(m.group(1)), col))
+
+        if not part_cols:
+            continue
+
+        part_cols = [col for _, col in sorted(part_cols)]
+
+        def join_parts(row) -> str:
+            vals = []
+            for c in part_cols:
+                v = row.get(c, "")
+                if pd.isna(v):
+                    v = ""
+                v = str(v)
+                if v and v.lower() not in {"nan", "none", "na"}:
+                    vals.append(v)
+            joined = "".join(vals).strip()
+            if joined:
+                return joined
+
+            existing = row.get(base_col, "")
+            if pd.isna(existing):
+                return ""
+            return str(existing)
+
+        out[base_col] = out.apply(join_parts, axis=1)
+
+    return out
+
+
+def read_stage0_input_table(path: Path) -> pd.DataFrame:
+    """
+    Read a cached Stage0 input table and return a Stage1-ready dataframe.
+
+    Supported formats:
+      - .parquet, preferred
+      - .xlsx / .xls
+      - .csv
+      - .jsonl / .json
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"Cached Stage0 input file not found: {path}")
+
+    suffix = path.suffix.lower()
+
+    if suffix == ".parquet":
+        df = pd.read_parquet(path)
+    elif suffix in {".xlsx", ".xls"}:
+        df = pd.read_excel(path, dtype=str, keep_default_na=False, engine="openpyxl")
+    elif suffix == ".csv":
+        df = pd.read_csv(path, dtype=str, keep_default_na=False)
+    elif suffix in {".jsonl", ".json"}:
+        df = pd.read_json(path, lines=True)
+    else:
+        raise ValueError(f"Unsupported cached Stage0 input file type: {path}")
+
+    df = _reconstruct_stage0_long_text_columns(
+        df,
+        long_text_columns=("GSE_Info", "GSM_Info"),
+    )
+
+    required = {
+        "GSE_ID",
+        "GSE_Info",
+        "GSM_Info",
+        "GSM_Counts",
+        "GSM_ID_List",
+    }
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(
+            f"Cached Stage0 input is missing required columns: {sorted(missing)}"
+        )
+
+    df["GSE_ID"] = df["GSE_ID"].astype(str).str.strip()
+    df["GSM_Counts"] = (
+        pd.to_numeric(df["GSM_Counts"], errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
+
+    if "Chunk_Index" not in df.columns:
+        df["Chunk_Index"] = df.groupby("GSE_ID", sort=False).cumcount() + 1
+
+    if "Chunk_ID" not in df.columns:
+        df["Chunk_ID"] = (
+            df["GSE_ID"].astype(str)
+            + "_chunk_"
+            + df["Chunk_Index"].astype(str)
+        )
+
+    # Keep a stable row order for reproducible model comparison.
+    df = df.reset_index(drop=True)
+
+    return df
 
 def write_duplicated_input_gse_report(original_gse_file: Path, out_path: Path) -> Path | None:
     """
@@ -1073,6 +1338,15 @@ def main() -> None:
     parser.add_argument("--workdir", default=".", help="Project working directory.")
     parser.add_argument("--gse", nargs="*", default=None, help="One or more GSE IDs.")
     parser.add_argument("--gse-file", default=None, help="File containing GSE IDs.")
+    parser.add_argument(
+        "--stage0-input",
+        default=None,
+        help=(
+            "Cached Stage0 input table to use directly. "
+            "If provided, Stage0 GEO retrieval is skipped. "
+            "Recommended format: .parquet. Also supports .xlsx, .csv, .jsonl."
+        ),
+    )
     parser.add_argument("--run-version", default=None, help="Optional run version.")
     parser.add_argument(
         "--skip-stage2-rerun",
@@ -1089,11 +1363,22 @@ def main() -> None:
         action="store_true",
         help="Raise an error if GSM identity changes across stages.",
     )
+
+    parser.add_argument(
+        "--stage0-max-gsms-per-chunk",
+        type=int,
+        default=None,
+        help=(
+            "Optional maximum GSMs per Stage0 metadata chunk. "
+            "Use this for very large GSEs to reduce Stage1 output JSON failures. "
+            "Example: 75 or 100. If omitted, the config default is used."
+        ),
+    )
     
     parser.add_argument(
     "--stage1-qa3-mode",
     choices=["off", "smart", "full"],
-    default="off",
+    default="smart",
     help=(
         "Stage1 QA3 mode. "
         "off: skip LLM QA3 evidence verification; recommended default for scalable full runs. "
@@ -1125,6 +1410,18 @@ def main() -> None:
         help="Maximum Stage1 QA3 tasks for automated Mode A.",
     )
 
+    parser.add_argument(
+        "--stage1-qa3-fields",
+        "--qa3-target-fields",
+        dest="stage1_qa3_fields",
+        default="GSE_Pert,GSM_Pert,RNA_Source,Tissue",
+        help=(
+            "Comma-separated target fields for field-targeted QA3. "
+            "Default: GSE_Pert,GSM_Pert,RNA_Source,Tissue. "
+            "Use ALL to disable field filtering."
+        ),
+    )
+
     args = parser.parse_args()
     pipeline_start = time.perf_counter()
     stage_times = {}
@@ -1132,6 +1429,9 @@ def main() -> None:
     workdir = Path(args.workdir).resolve()
     cfg = default_config(workdir)
     cfg.run_version = args.run_version or make_run_version()
+
+    if args.stage0_max_gsms_per_chunk is not None:
+        cfg.stage0_max_gsms_per_chunk = int(args.stage0_max_gsms_per_chunk)
 
     set_public_paths(cfg)
     cfg.ensure_dirs()
@@ -1144,8 +1444,29 @@ def main() -> None:
 
     duplicated_input_gse_path = None
     input_count_audit_path = None
+    cached_stage0_input_path = None
+    df_stage0_cached = None
 
-    if args.gse_file:
+    if args.stage0_input:
+        cached_stage0_input_path = Path(args.stage0_input).resolve()
+        df_stage0_cached = read_stage0_input_table(cached_stage0_input_path)
+
+        original_gse_file = None
+        gse_ids = clean_gse_ids(df_stage0_cached["GSE_ID"].astype(str).tolist())
+
+        print("[RUN] Using cached Stage0 input; Stage0 GEO retrieval will be skipped.")
+        print(f"[RUN] stage0_input={cached_stage0_input_path}")
+        print(f"[RUN] cached_stage0_chunks={df_stage0_cached.shape[0]}")
+        print(
+            f"[RUN] cached_stage0_unique_gse="
+            f"{df_stage0_cached['GSE_ID'].astype(str).nunique()}"
+        )
+        print(
+            "[RUN] cached_stage0_total_gsm="
+            f"{int(pd.to_numeric(df_stage0_cached['GSM_Counts'], errors='coerce').fillna(0).sum())}"
+        )
+
+    elif args.gse_file:
         original_gse_file = Path(args.gse_file).resolve()
         gse_ids = read_gse_file(original_gse_file)
 
@@ -1160,7 +1481,7 @@ def main() -> None:
         original_gse_file = None
         gse_ids = clean_gse_ids(args.gse)
     else:
-        raise ValueError("Provide either --gse or --gse-file.")
+        raise ValueError("Provide --stage0-input, --gse, or --gse-file.")
 
     cfg.gse_list_input = write_gse_input_file(
         gse_ids,
@@ -1170,9 +1491,16 @@ def main() -> None:
     print(f"[RUN] workdir={cfg.workdir}")
     print(f"[RUN] run_version={cfg.run_version}")
     print(f"[RUN] GSE count={len(gse_ids)}")
-    print("[RUN] stage0_chunking_policy=metadata-token-aware; small GSEs kept together, large GSEs split only as needed")
-    print(f"[RUN] stage0_metadata_safe_input_token_limit={getattr(cfg, 'stage0_metadata_safe_input_token_limit', 180000)}")
-    print(f"[RUN] stage0_max_gsms_per_chunk={getattr(cfg, 'stage0_max_gsms_per_chunk', 0)} (0 means no fixed GSM-count cap)")
+
+    if cached_stage0_input_path is not None:
+        print("[RUN] stage0_mode=cached_input_skip_geo_retrieval")
+        print(f"[RUN] stage0_cached_input={cached_stage0_input_path}")
+    else:
+        print("[RUN] stage0_mode=geo_retrieval")
+        print("[RUN] stage0_chunking_policy=metadata-token-aware; small GSEs kept together, large GSEs split only as needed")
+        print(f"[RUN] stage0_metadata_safe_input_token_limit={getattr(cfg, 'stage0_metadata_safe_input_token_limit', 180000)}")
+        print(f"[RUN] stage0_max_gsms_per_chunk={getattr(cfg, 'stage0_max_gsms_per_chunk', 0)} (0 means no fixed GSM-count cap)")
+
     print("[RUN] stage0_restart_artifact=stage0_input.parquet; Excel is review copy only")
     print(f"[RUN] post_prompt_dir={cfg.post_prompt_dir}")
     print(f"[RUN] llm_api_type={cfg.llm_api_type}")
@@ -1182,7 +1510,59 @@ def main() -> None:
 
     print("\n========== Stage 0 ==========")
     t0 = time.perf_counter()
-    df_stage0 = run_stage0_retrieval(cfg)
+
+    if df_stage0_cached is not None:
+        df_stage0 = df_stage0_cached.copy()
+
+        cached_out_parq = Path(cfg.outputs_dir) / f"{cfg.run_version}_stage0_input.parquet"
+        cached_out_xlsx = Path(cfg.outputs_dir) / f"{cfg.run_version}_stage0_input.xlsx"
+        cached_out_jsonl = Path(cfg.outputs_dir) / f"{cfg.run_version}_stage0_input.full.jsonl"
+
+        # Save run-versioned copies so the downstream artifact structure remains unchanged.
+        df_stage0.to_parquet(cached_out_parq, index=False)
+        df_stage0.to_json(
+            cached_out_jsonl,
+            orient="records",
+            lines=True,
+            force_ascii=False,
+        )
+        write_excel_with_long_text_parts(
+            df_stage0,
+            cached_out_xlsx,
+            long_text_columns=("GSE_Info", "GSM_Info"),
+            part_limit=int(getattr(cfg, "stage0_excel_text_part_char_limit", 32000)),
+        )
+
+        stage0_summary = {
+            "run_version": cfg.run_version,
+            "stage0_mode": "cached_input_skip_geo_retrieval",
+            "cached_stage0_input_source": str(cached_stage0_input_path),
+            "stage0_chunk_rows": int(df_stage0.shape[0]),
+            "unique_gse_in_output": int(df_stage0["GSE_ID"].astype(str).nunique()),
+            "total_gsm_expected": int(
+                pd.to_numeric(df_stage0["GSM_Counts"], errors="coerce")
+                .fillna(0)
+                .sum()
+            ),
+            "output_xlsx_review_copy": str(cached_out_xlsx),
+            "output_parquet_full_fidelity": str(cached_out_parq),
+            "output_jsonl_full": str(cached_out_jsonl),
+            "excel_is_preview": True,
+        }
+
+        stage0_summary_fp = Path(cfg.ledger_dir) / f"{cfg.run_version}_stage0_summary.json"
+        stage0_summary_fp.write_text(json.dumps(stage0_summary, indent=2), encoding="utf-8")
+
+        print("[Stage0] Skipped GEO retrieval; using cached Stage0 input.")
+        print("[SAVED] Stage0 cached Excel review copy:", cached_out_xlsx)
+        print("[SAVED] Stage0 cached Parquet full:", cached_out_parq)
+        print("[SAVED] Stage0 cached JSONL full:", cached_out_jsonl)
+        print("[SAVED] Stage0 cached summary:", stage0_summary_fp)
+        print("Stage0 CACHED rows:", df_stage0.shape)
+
+    else:
+        df_stage0 = run_stage0_retrieval(cfg)
+
     stage_times["stage0_seconds"] = round(time.perf_counter() - t0, 2)
     print_stage_time("Stage 0", stage_times["stage0_seconds"])
 
@@ -1268,6 +1648,14 @@ def main() -> None:
         output_corrected=qa1_corrected,
         output_candidates=qa1_candidates,
     )
+
+    print_stage1_qa1_log_summary(
+        df_stage1_raw_with_info=df_stage1_raw_with_info,
+        qa1_summary_df=qa1_summary_df,
+        qa1_candidates_df=qa1_candidates_df,
+        qa1_review_df=qa1_review_df,
+    )
+
     stage_times["stage1_qa1_seconds"] = round(time.perf_counter() - t0, 2)
     print_stage_time("Stage 1 QA1", stage_times["stage1_qa1_seconds"])
     print("[SAVED] Stage1 QA1 report:", qa1_report)
@@ -1282,6 +1670,7 @@ def main() -> None:
     qa2_cfg = ValidationConfig(gse_col="GSE_ID", gsm_col="GSM_ID")
     qa2_issues_df = validate_cross_agent(df_stage1_qa1, qa2_cfg)
     write_outputs(df_stage1_qa1, qa2_issues_df, qa2_report)
+    print_stage1_qa2_log_summary(qa2_issues_df)
     stage_times["stage1_qa2_seconds"] = round(time.perf_counter() - t0, 2)
     print_stage_time("Stage 1 QA2", stage_times["stage1_qa2_seconds"])
     print("[SAVED] Stage1 QA2 report:", qa2_report)
@@ -1291,14 +1680,14 @@ def main() -> None:
 
     qa3_mode = str(args.stage1_qa3_mode).strip().lower()
 
+    qa3_target_fields = parse_qa3_target_fields(args.stage1_qa3_fields)
+
     if args.stage1_qa3_max_tasks is not None:
-        qa3_max_tasks = int(args.stage1_qa3_max_tasks)
-    elif qa3_mode == "full":
-        qa3_max_tasks = 150
+        qa3_max_tasks = args.stage1_qa3_max_tasks
     elif qa3_mode == "off":
         qa3_max_tasks = 0
     else:
-        qa3_max_tasks = 50
+        qa3_max_tasks = None
 
     print(
         "[Stage1 QA3] Mode="
@@ -1319,16 +1708,18 @@ def main() -> None:
         print("[Stage1 QA3] Ambiguous or unsupported recommendations are routed to the human review queue.")
         
         qa3_cfg = EvidenceVerifierConfig(
-            gse_col="GSE_ID",
-            gsm_col="GSM_ID",
-            qa3_mode=qa3_mode,
-            max_tasks=qa3_max_tasks,
-            min_confidence_to_apply=float(getattr(cfg, "qa3_min_confidence_to_apply", 0.90)),
-            build_tasks_only=bool(args.stage1_qa3_build_tasks_only or getattr(cfg, "qa3_build_tasks_only", False)),
-            apply_accepted=bool(getattr(cfg, "qa3_auto_apply_high_confidence", True)) and not args.stage1_qa3_no_apply,
-            allow_nonempty_overwrite=bool(getattr(cfg, "qa3_allow_nonempty_overwrite", False)),
-            include_sampling_qc=True if qa3_mode == "full" else False,
-        )
+           gse_col="GSE_ID",
+           gsm_col="GSM_ID",
+           qa3_mode=qa3_mode,
+           max_tasks=qa3_max_tasks,
+           min_confidence_to_apply=float(getattr(cfg, "qa3_min_confidence_to_apply", 0.90)),
+           build_tasks_only=bool(args.stage1_qa3_build_tasks_only or getattr(cfg, "qa3_build_tasks_only", False)),
+           apply_accepted=bool(getattr(cfg, "qa3_auto_apply_high_confidence", True)) and not args.stage1_qa3_no_apply,
+           allow_nonempty_overwrite=bool(getattr(cfg, "qa3_allow_nonempty_overwrite", False)),
+           include_sampling_qc=True if qa3_mode == "full" else False,
+           qa3_target_fields=qa3_target_fields,
+           fields_for_sampling_qc=qa3_target_fields or ("GSE_Pert", "GSM_Pert", "RNA_Source", "Tissue"),
+    )
 
         df_stage1_qa3, qa3_outputs = run_stage1_qa3_verification_pipeline(
             df_stage1=df_stage1_qa1,
@@ -1533,6 +1924,16 @@ def main() -> None:
     summary = {
         "run_version": cfg.run_version,
         "gse_count": len(gse_ids),
+        "stage0_mode": (
+            "cached_input_skip_geo_retrieval"
+            if cached_stage0_input_path is not None
+            else "geo_retrieval"
+        ),
+        "stage0_input_cached_source": (
+            str(cached_stage0_input_path)
+            if cached_stage0_input_path is not None
+            else ""
+        ),
         "stage0_rows": int(df_stage0.shape[0]),
         "stage1_rows": int(df_stage1.shape[0]),
         "stage2_pass1_rows": int(df_stage2_pass1.shape[0]),
@@ -1554,6 +1955,7 @@ def main() -> None:
         "stage1_qa2_report_xlsx": str(qa2_report),
         "stage1_qa3_mode": qa3_mode,
         "stage1_qa3_max_tasks": qa3_max_tasks,
+        "stage1_qa3_fields": "ALL" if qa3_target_fields is None else ",".join(qa3_target_fields),
         "stage1_qa3_outputs": {k: str(v) for k, v in qa3_outputs.items()},
         "stage1_raw_xlsx": str(stage1_raw_xlsx),
         "stage1_raw_with_info_xlsx": str(stage1_with_info_xlsx),

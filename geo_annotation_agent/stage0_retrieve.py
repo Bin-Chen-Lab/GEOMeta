@@ -42,6 +42,67 @@ def _s(x) -> str:
 def _chunk(xs: List[Any], n: int) -> List[List[Any]]:
     return [xs[i:i + n] for i in range(0, len(xs), n)]
 
+def _as_bool(x, default: bool = False) -> bool:
+    if x is None:
+        return bool(default)
+    if isinstance(x, bool):
+        return x
+    v = str(x).strip().lower()
+    if v in {"1", "true", "yes", "y", "on"}:
+        return True
+    if v in {"0", "false", "no", "n", "off"}:
+        return False
+    return bool(default)
+
+
+def _resolve_stage0_effective_max_gsms_per_chunk(
+    cfg,
+    *,
+    gse_id: str,
+    retrieved_gsm_count: int,
+) -> tuple[int, str]:
+    """
+    Decide the effective GSM-count cap for one GSE.
+
+    Priority:
+      1. Manual global cap, cfg.stage0_max_gsms_per_chunk.
+      2. Optional explicit forced-split GSE list.
+      3. Automatic large-GSE policy.
+      4. No GSM-count cap; token-aware splitting still applies.
+    """
+    manual_global_cap = int(getattr(cfg, "stage0_max_gsms_per_chunk", 0) or 0)
+
+    if manual_global_cap > 0:
+        return manual_global_cap, f"manual_global_gsm_cap_{manual_global_cap}"
+
+    forced_ids_raw = str(getattr(cfg, "stage0_force_split_gse_ids", "") or "").strip()
+    forced_ids = {
+        x.strip()
+        for x in forced_ids_raw.replace(";", ",").replace("|", ",").split(",")
+        if x.strip()
+    }
+
+    if gse_id in forced_ids:
+        forced_cap = int(getattr(cfg, "stage0_force_split_max_gsms_per_chunk", 75) or 75)
+        forced_cap = max(1, forced_cap)
+        return forced_cap, f"forced_gse_split_cap_{forced_cap}"
+
+    auto_enabled = _as_bool(
+        getattr(cfg, "stage0_auto_large_gse_chunking", True),
+        default=True,
+    )
+
+    if auto_enabled:
+        auto_threshold = int(getattr(cfg, "stage0_auto_large_gse_min_gsms", 300) or 300)
+        auto_cap = int(getattr(cfg, "stage0_auto_large_gse_max_gsms_per_chunk", 75) or 75)
+
+        auto_threshold = max(1, auto_threshold)
+        auto_cap = max(1, auto_cap)
+
+        if int(retrieved_gsm_count) >= auto_threshold:
+            return auto_cap, f"auto_large_gse_split_cap_{auto_cap}_threshold_{auto_threshold}"
+
+    return 0, "no_fixed_gsm_count_cap"
 
 def _unique_preserve_order(xs: List[str]) -> List[str]:
     seen = set()
@@ -696,13 +757,21 @@ def run_stage0_retrieval(
                 gsm_records=gsm_records,
             )
 
+            effective_max_gsms_per_chunk, gsm_count_chunking_policy = (
+                _resolve_stage0_effective_max_gsms_per_chunk(
+                    cfg,
+                    gse_id=gse_id,
+                    retrieved_gsm_count=retrieved_count,
+                )
+            )
+
             chunks = split_gsm_records_by_metadata_limits(
                 gsm_records=gsm_records,
                 gse_info=gse_info,
                 token_aware=bool(getattr(cfg, "stage0_token_aware_chunking", True)),
                 metadata_safe_token_limit=int(getattr(cfg, "stage0_metadata_safe_input_token_limit", 180000)),
                 token_encoding=str(getattr(cfg, "llm_token_encoding", "o200k_base")),
-                max_gsms_per_chunk=int(getattr(cfg, "stage0_max_gsms_per_chunk", 0)),
+                max_gsms_per_chunk=effective_max_gsms_per_chunk,
             )
 
             for ci, chunk_obj in enumerate(chunks, start=1):
@@ -727,6 +796,8 @@ def run_stage0_retrieval(
                         "Stage0_Metadata_Safe_Token_Limit": int(getattr(cfg, "stage0_metadata_safe_input_token_limit", 180000)),
                         "Stage0_Metadata_Over_Safe_Token_Limit": int(chunk_obj.get("metadata_tokens", 0)) > int(getattr(cfg, "stage0_metadata_safe_input_token_limit", 180000)),
                         "Stage0_Chunking_Reason": str(chunk_obj.get("chunk_reason", "")),
+                        "Stage0_GSM_Count_Chunking_Policy": gsm_count_chunking_policy,
+                        "Stage0_Effective_Max_GSMs_Per_Chunk": effective_max_gsms_per_chunk,
                         "Stage0_Single_GSM_Over_Token_Limit": bool(chunk_obj.get("single_gsm_over_stage0_token_limit", False)),
                         "GSE_Info_Excel_Over_Limit": len(str(gse_info)) > int(getattr(cfg, "stage0_excel_cell_char_limit", 32767)),
                         "GSM_Info_Excel_Over_Limit": len(str(gsm_info_chunk)) > int(getattr(cfg, "stage0_excel_cell_char_limit", 32767)),
@@ -785,6 +856,8 @@ def run_stage0_retrieval(
         "Stage0_Metadata_Safe_Token_Limit",
         "Stage0_Metadata_Over_Safe_Token_Limit",
         "Stage0_Chunking_Reason",
+        "Stage0_GSM_Count_Chunking_Policy",
+        "Stage0_Effective_Max_GSMs_Per_Chunk",
         "Stage0_Single_GSM_Over_Token_Limit",
         "GSE_Info_Excel_Over_Limit",
         "GSM_Info_Excel_Over_Limit",
@@ -843,10 +916,24 @@ def run_stage0_retrieval(
         "total_gsm_failed": int(df_ledger["failed_gsm_count"].sum()) if not df_ledger.empty else 0,
         "failed_gse_count": int((df_ledger["status"] == "failed").sum()) if not df_ledger.empty else 0,
         "partial_gse_count": int((df_ledger["status"] == "partial").sum()) if not df_ledger.empty else 0,
-        "stage0_chunking_policy": "metadata-token-aware; no fixed GSM-count batch unless stage0_max_gsms_per_chunk > 0",
+        "stage0_chunking_policy": (
+            "metadata-token-aware plus adaptive large-GSE GSM-count cap; "
+            "manual stage0_max_gsms_per_chunk overrides adaptive policy when > 0"
+        ),
         "stage0_metadata_safe_input_token_limit": int(getattr(cfg, "stage0_metadata_safe_input_token_limit", 180000)),
         "stage0_max_gsms_per_chunk": int(getattr(cfg, "stage0_max_gsms_per_chunk", 0)),
-        "output_xlsx_review_copy": str(out_xlsx),
+        "stage0_auto_large_gse_chunking": _as_bool(
+            getattr(cfg, "stage0_auto_large_gse_chunking", True),
+            default=True,
+        ),
+        "stage0_auto_large_gse_min_gsms": int(getattr(cfg, "stage0_auto_large_gse_min_gsms", 300)),
+        "stage0_auto_large_gse_max_gsms_per_chunk": int(
+            getattr(cfg, "stage0_auto_large_gse_max_gsms_per_chunk", 75)
+        ),
+        "stage0_force_split_gse_ids": str(getattr(cfg, "stage0_force_split_gse_ids", "")),
+        "stage0_force_split_max_gsms_per_chunk": int(
+            getattr(cfg, "stage0_force_split_max_gsms_per_chunk", 75)
+        ),
         "output_parquet_full_fidelity": str(out_parq),
         "output_jsonl_full": str(out_jsonl) if bool(getattr(cfg, "stage0_save_full_metadata_jsonl", True)) else "",
         "excel_is_preview": True,

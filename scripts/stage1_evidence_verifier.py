@@ -170,16 +170,20 @@ DESIGN_FIELDS = [
 
 QA3_VALID_MODES = {"off", "smart", "full"}
 
-QA3_SMART_HIGH_VALUE_FIELDS = {
-    "Disease",
-    "Tissue",
-    "RNA_Source",
+# Field-targeted QA3:
+# Based on model-comparison results, QA3 is restricted to the fields
+# that were empirically most challenging and most likely to benefit
+# from evidence-grounded LLM verification.
+FIELD_TARGETED_QA3_FIELDS = (
     "GSE_Pert",
     "GSM_Pert",
-    "Pert",
-    "SampleType",
-    "Specimen_Type",
-}
+    "RNA_Source",
+    "Tissue",
+)
+
+FIELD_TARGETED_QA3_FIELD_SET = set(FIELD_TARGETED_QA3_FIELDS)
+
+QA3_SMART_HIGH_VALUE_FIELDS = FIELD_TARGETED_QA3_FIELD_SET
 
 QA3_SMART_LOW_YIELD_FIELDS = {
     "RNA_Library",
@@ -189,8 +193,10 @@ QA3_SMART_LOW_YIELD_FIELDS = {
     "Route_Admin",
 }
 
-QA3_SMART_DEFAULT_MAX_TASKS = 50
-QA3_FULL_DEFAULT_MAX_TASKS = 150
+# No fixed default cap for field-targeted QA3.
+# max_tasks should be None unless the user explicitly provides --max-tasks.
+QA3_SMART_DEFAULT_MAX_TASKS = None
+QA3_FULL_DEFAULT_MAX_TASKS = None
 
 # -----------------------------------------------------------------------------
 # Config
@@ -215,17 +221,12 @@ class EvidenceVerifierConfig:
     include_stage1_qa2_low: bool = False
     include_sampling_qc: bool = True
     max_sampling_qc_tasks_per_gse: int = 2
-    fields_for_sampling_qc: Tuple[str, ...] = (
-        "Disease",
-        "Tissue",
-        "RNA_Source",
-        "RNA_Library",
-        "GSE_Pert",
-        "GSM_Pert",
-        "Pert",
-        "SampleType",
-        "Specimen_Type",
-    )
+
+    # None means no field filter.
+    # Default is field-targeted QA3.
+    qa3_target_fields: Optional[Tuple[str, ...]] = FIELD_TARGETED_QA3_FIELDS
+
+    fields_for_sampling_qc: Tuple[str, ...] = FIELD_TARGETED_QA3_FIELDS
 
 
 # -----------------------------------------------------------------------------
@@ -271,6 +272,43 @@ def truncate_text(x: Any, max_chars: int) -> str:
         return text
     return text[:max_chars] + " ...[truncated]"
 
+EXCEL_CELL_CHAR_LIMIT = 32767
+EXCEL_SAFE_CHAR_LIMIT = 30000
+
+
+def make_excel_safe_df(df: pd.DataFrame, max_chars: int = EXCEL_SAFE_CHAR_LIMIT) -> pd.DataFrame:
+    """
+    Return an Excel-display-safe copy of a dataframe.
+
+    This does not modify the in-memory dataframe used by QA3.
+    Long text cells are truncated only in Excel audit outputs.
+    Full untruncated records should be preserved in JSONL/debug artifacts.
+    """
+    if df is None or df.empty:
+        return df
+
+    out = df.copy()
+    suffix = " ...[truncated for Excel display; full record preserved in JSONL/debug artifacts]"
+
+    # Keep final cell safely below Excel's 32,767-character limit.
+    slice_chars = max(1000, int(max_chars) - len(suffix))
+
+    for col in list(out.columns):
+        s = out[col].map(lambda x: "" if x is None else str(x))
+        too_long = s.str.len() > max_chars
+
+        if too_long.any():
+            out[col] = s.where(
+                ~too_long,
+                s.str.slice(0, slice_chars) + suffix,
+            )
+
+            flag_col = f"{col}_Excel_Truncated"
+            out[flag_col] = False
+            out.loc[too_long, flag_col] = True
+
+    return out
+
 
 def read_table(path: Path, sheet_name: Optional[str] = None) -> pd.DataFrame:
     suffix = path.suffix.lower()
@@ -308,6 +346,83 @@ def split_gsm_list(x: Any) -> List[str]:
             out.append(p)
     return out
 
+def normalize_qa3_target_fields(value: Any) -> Optional[Tuple[str, ...]]:
+    """
+    Normalize QA3 target fields.
+
+    Returns:
+        None: no field filtering; QA3 can consider all target fields.
+        tuple[str, ...]: allowed field-targeted QA3 fields.
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text.upper() in {"ALL", "*"}:
+            return None
+        fields = [x.strip() for x in re.split(r"[,;|]", text) if x.strip()]
+    else:
+        fields = [str(x).strip() for x in value if str(x).strip()]
+
+    if not fields:
+        return None
+
+    valid = set(STAGE1_FIELDS)
+    unknown = sorted(set(fields) - valid)
+    if unknown:
+        raise ValueError(
+            "Unknown QA3 target field(s): "
+            + ", ".join(unknown)
+            + ". Valid fields include: "
+            + ", ".join(STAGE1_FIELDS)
+        )
+
+    out = []
+    seen = set()
+    for f in fields:
+        if f not in seen:
+            seen.add(f)
+            out.append(f)
+
+    return tuple(out)
+
+
+def apply_qa3_target_field_filter(
+    tasks_df: pd.DataFrame,
+    cfg: EvidenceVerifierConfig,
+) -> pd.DataFrame:
+    """
+    Field-targeted QA3 filter.
+
+    QA1 and QA2 may generate many review candidates, but QA3 should spend
+    LLM calls only on empirically difficult target fields.
+    """
+    if tasks_df is None or tasks_df.empty:
+        return tasks_df
+
+    target_fields = normalize_qa3_target_fields(getattr(cfg, "qa3_target_fields", None))
+
+    out = tasks_df.copy()
+
+    if target_fields is None:
+        out["QA3_Field_Targeted"] = "NO_FILTER"
+        out["QA3_Target_Fields"] = "ALL"
+        return out.reset_index(drop=True)
+
+    allowed = set(target_fields)
+
+    if "Target_Field" not in out.columns:
+        return out.head(0).copy()
+
+    out["_Target_Field_Clean"] = out["Target_Field"].map(clean_value)
+    out = out.loc[out["_Target_Field_Clean"].isin(allowed)].copy()
+    out = out.drop(columns=["_Target_Field_Clean"])
+
+    out["QA3_Field_Targeted"] = "YES"
+    out["QA3_Target_Fields"] = ", ".join(target_fields)
+
+    return out.reset_index(drop=True)
 
 def ensure_id_cols(df: pd.DataFrame, cfg: EvidenceVerifierConfig) -> pd.DataFrame:
     missing = [c for c in [cfg.gse_col, cfg.gsm_col] if c not in df.columns]
@@ -389,6 +504,68 @@ def add_task(tasks: List[Dict[str, Any]], task: Dict[str, Any], seen: set[Tuple[
     task["Task_ID"] = f"EV{len(tasks) + 1:07d}"
     tasks.append(task)
 
+def severity_rank(severity: Any) -> int:
+    sev = clean_value(severity).strip().title()
+    return {"High": 3, "Medium": 2, "Low": 1}.get(sev, 0)
+
+
+def strongest_severity(values: Iterable[Any]) -> str:
+    vals = [clean_value(v).strip().title() for v in values if clean_value(v)]
+    if not vals:
+        return "Medium"
+    return sorted(vals, key=severity_rank, reverse=True)[0]
+
+
+def infer_qa2_target_field(r: pd.Series, fields_involved: List[str]) -> str:
+    """Choose the field QA3 should verify for a QA2 rule.
+
+    QA2 rows are often sample-level issue rows. For example, rule R032 is
+    reported as GSM_Pert=Perturbed but Pert missing. The field to rescue is
+    Pert, not GSM_Pert.
+    """
+    suggested_field = clean_value(r.get("Suggested_Field", ""))
+    rule_id = clean_value(r.get("Rule_ID", ""))
+
+    # Controlled vocabulary rule IDs are written as R090_<Field>.
+    if rule_id.startswith("R090_"):
+        field_from_rule = rule_id.replace("R090_", "", 1)
+        if field_from_rule in HIGH_IMPACT_FIELDS or field_from_rule in SAMPLE_SPECIFIC_HIGH_IMPACT_FIELDS:
+            return field_from_rule
+
+    rule_target = {
+        "R001": "RNA_Library",
+        "R002": "RNA_Library",
+        "R010": "SampleType",
+        "R011": "Specimen_Type",
+        "R012": "SampleType",
+        "R013": "Tissue",
+        "R020": "Experimental_Setting",
+        "R021": "Experimental_Setting",
+        "R022": "Experimental_Setting",
+        "R030": "GSE_Pert",
+        "R031": "GSM_Pert",
+        "R032": "Pert",
+        "R033": "Pert",
+        "R042": "Sex",
+        "R043": "Sex",
+        "R044": "Age",
+        "R050": "Disease",
+        "R051": "Disease",
+        "R091": "Sex",
+        "R092": "GSM_Pert",
+    }
+
+    if rule_id in rule_target:
+        return rule_target[rule_id]
+
+    if suggested_field in HIGH_IMPACT_FIELDS or suggested_field in SAMPLE_SPECIFIC_HIGH_IMPACT_FIELDS:
+        return suggested_field
+
+    for f in fields_involved:
+        if f in HIGH_IMPACT_FIELDS or f in SAMPLE_SPECIFIC_HIGH_IMPACT_FIELDS:
+            return f
+
+    return suggested_field or (fields_involved[0] if fields_involved else "")
 
 def build_tasks_from_stage1_qa1(
     df_stage1: pd.DataFrame,
@@ -501,6 +678,18 @@ def build_tasks_from_stage1_qa2(
     stage1_qa2_report: Optional[Path],
     cfg: EvidenceVerifierConfig,
 ) -> List[Dict[str, Any]]:
+    """Build grouped QA3 tasks from QA2 issue rows.
+
+    QA2 is row-level and can generate many repeated issue rows within the same
+    GSE. Sending each QA2 issue row to QA3 creates repeated LLM calls.
+
+    This function collapses repeated QA2 issues into one GSE-level QA3 task using:
+
+        GSE_ID + Rule_ID + Target_Field + Task_Type + Issue_Type
+
+    The affected GSM IDs are carried forward so QA3 can still make
+    sample-specific decisions.
+    """
     tasks: List[Dict[str, Any]] = []
     seen: set[Tuple[str, str, str, str]] = set()
     issues = read_excel_sheet_if_exists(stage1_qa2_report, "Cross_Agent_Issues")
@@ -513,29 +702,39 @@ def build_tasks_from_stage1_qa2(
     if cfg.include_stage1_qa2_low:
         allowed_sev.add("Low")
 
+    normalized_rows: List[Dict[str, Any]] = []
+
     for _, r in issues.iterrows():
-        severity = clean_value(r.get("Severity", ""))
+        severity = clean_value(r.get("Severity", "")).strip().title()
         needs_llm = clean_value(r.get("Needs_LLM_Review", "")).upper() == "YES"
         needs_human = clean_value(r.get("Needs_Human_Review", "")).upper() == "YES"
+
         if severity not in allowed_sev and not needs_llm and not needs_human:
             continue
 
-        suggested_field = clean_value(r.get("Suggested_Field", ""))
-        fields_involved = [x.strip() for x in clean_value(r.get("Fields_Involved", "")).split(";") if x.strip()]
-        target_field = suggested_field if suggested_field else (fields_involved[0] if fields_involved else "")
-        if target_field and target_field not in HIGH_IMPACT_FIELDS:
-            # Keep conflicts that involve high-impact fields even if suggested_field is generic.
-            if not any(f in HIGH_IMPACT_FIELDS for f in fields_involved):
-                continue
-            target_field = next((f for f in fields_involved if f in HIGH_IMPACT_FIELDS), target_field)
+        fields_involved = [
+            x.strip()
+            for x in clean_value(r.get("Fields_Involved", "")).split(";")
+            if x.strip()
+        ]
 
-        add_task(
-            tasks,
+        target_field = infer_qa2_target_field(r, fields_involved)
+
+        if (
+            target_field
+            and target_field not in HIGH_IMPACT_FIELDS
+            and target_field not in SAMPLE_SPECIFIC_HIGH_IMPACT_FIELDS
+        ):
+            continue
+
+        gsm_id = clean_value(r.get("GSM_ID", ""))
+
+        normalized_rows.append(
             {
                 "Task_Source": "Stage1 QA2",
                 "Task_Type": "cross_agent_conflict_verification",
                 "GSE_ID": clean_value(r.get("GSE_ID", "")),
-                "GSM_ID": clean_value(r.get("GSM_ID", "")),
+                "GSM_ID": gsm_id,
                 "Target_Field": target_field,
                 "Issue_Type": clean_value(r.get("Issue_Type", "Cross-agent conflict")),
                 "Severity": severity or "Medium",
@@ -543,13 +742,96 @@ def build_tasks_from_stage1_qa2(
                 "Current_Value": "",
                 "Suggested_Value_From_Rule": clean_value(r.get("Suggested_Value", "")),
                 "Example_Missing_GSMs": "",
+                "Affected_GSMs": gsm_id,
+                "Affected_GSM_Count": 1 if gsm_id else 0,
+                "Example_Affected_GSMs": gsm_id,
                 "Rule_ID": clean_value(r.get("Rule_ID", "")),
                 "Rule_Name": clean_value(r.get("Rule_Name", "")),
                 "Fields_Involved": "; ".join(fields_involved),
-                "Issue_Row_JSON": json.dumps({k: clean_value(v) for k, v in r.to_dict().items()}, ensure_ascii=False),
-            },
-            seen,
+                "Grouped_From_QA2": "NO",
+                "Grouped_Issue_Count": 1,
+                "Issue_Row_JSON": json.dumps(
+                    {k: clean_value(v) for k, v in r.to_dict().items()},
+                    ensure_ascii=False,
+                ),
+            }
         )
+
+    if not normalized_rows:
+        return tasks
+
+    raw = pd.DataFrame(normalized_rows)
+
+    group_cols = [
+        "GSE_ID",
+        "Rule_ID",
+        "Target_Field",
+        "Task_Type",
+        "Issue_Type",
+    ]
+
+    for _, sub in raw.groupby(group_cols, dropna=False, sort=False):
+        records = sub.to_dict("records")
+        first = records[0]
+
+        affected_gsms: List[str] = []
+        seen_gsms: set[str] = set()
+
+        for rec in records:
+            gsm = clean_value(rec.get("GSM_ID", ""))
+            if re.fullmatch(r"GSM\d+", gsm) and gsm not in seen_gsms:
+                seen_gsms.add(gsm)
+                affected_gsms.append(gsm)
+
+        if len(records) == 1:
+            task = dict(first)
+            task["Affected_GSMs"] = " | ".join(affected_gsms)
+            task["Affected_GSM_Count"] = len(affected_gsms)
+            task["Example_Affected_GSMs"] = " | ".join(affected_gsms[:20])
+        else:
+            suggested_values = [
+                clean_value(x)
+                for x in sub["Suggested_Value_From_Rule"].tolist()
+                if clean_value(x)
+            ]
+            suggested_values_unique = list(dict.fromkeys(suggested_values))
+
+            rule_names = [
+                clean_value(x)
+                for x in sub["Rule_Name"].tolist()
+                if clean_value(x)
+            ]
+
+            fields_involved = [
+                clean_value(x)
+                for x in sub["Fields_Involved"].tolist()
+                if clean_value(x)
+            ]
+
+            task = {
+                "Task_Source": "Stage1 QA2_Grouped",
+                "Task_Type": "cross_agent_conflict_verification",
+                "GSE_ID": clean_value(first.get("GSE_ID", "")),
+                "GSM_ID": "",
+                "Target_Field": clean_value(first.get("Target_Field", "")),
+                "Issue_Type": clean_value(first.get("Issue_Type", "Cross-agent conflict")),
+                "Severity": strongest_severity(sub["Severity"].tolist()),
+                "Review_Priority": "Grouped cross-agent validation",
+                "Current_Value": f"Grouped QA2 issue across {len(records)} row(s)",
+                "Suggested_Value_From_Rule": " | ".join(suggested_values_unique[:10]),
+                "Example_Missing_GSMs": "",
+                "Affected_GSMs": " | ".join(affected_gsms),
+                "Affected_GSM_Count": len(affected_gsms),
+                "Example_Affected_GSMs": " | ".join(affected_gsms[:20]),
+                "Rule_ID": clean_value(first.get("Rule_ID", "")),
+                "Rule_Name": " | ".join(list(dict.fromkeys(rule_names))[:5]),
+                "Fields_Involved": " | ".join(list(dict.fromkeys(fields_involved))[:10]),
+                "Grouped_From_QA2": "YES",
+                "Grouped_Issue_Count": len(records),
+                "Issue_Row_JSON": json.dumps(records[:200], ensure_ascii=False),
+            }
+
+        add_task(tasks, task, seen)
 
     return tasks
 
@@ -621,13 +903,17 @@ def _qa3_mode_normalized(mode: Any) -> str:
     return mode if mode in QA3_VALID_MODES else "smart"
 
 
-def _qa3_default_max_tasks_for_mode(mode: str) -> int:
+def _qa3_default_max_tasks_for_mode(mode: str) -> Optional[int]:
+    """
+    Return default QA3 cap.
+
+    For field-targeted QA3, smart/full do not use a fixed default cap.
+    A cap is applied only when the user explicitly provides max_tasks.
+    """
     mode = _qa3_mode_normalized(mode)
-    if mode == "full":
-        return QA3_FULL_DEFAULT_MAX_TASKS
     if mode == "off":
         return 0
-    return QA3_SMART_DEFAULT_MAX_TASKS
+    return None
 
 
 def _qa3_task_priority_score(row: pd.Series) -> int:
@@ -651,23 +937,24 @@ def _qa3_task_priority_score(row: pd.Series) -> int:
         score += 5
 
     field_weights = {
-        "Disease": 100,
-        "Tissue": 85,
-        "RNA_Source": 70,
-        "GSE_Pert": 70,
-        "GSM_Pert": 70,
-        "Pert": 65,
-        "SampleType": 60,
-        "Specimen_Type": 60,
-        "Seq_Type": 50,
-        "Organism": 45,
-        "Experimental_Setting": 45,
-        "Model_Type": 45,
-        "RNA_Library": 15,
-        "Pert_Dose": 10,
-        "Pert_Freq": 10,
-        "Pert_Duration": 10,
-        "Route_Admin": 10,
+        #"Disease": 100,
+        #"Tissue": 85,
+        "RNA_Source": 100,
+        "Tissue": 100,
+        "GSM_Pert": 100,
+        "GSE_Pert": 100,
+        #"Pert": 65,
+       # "SampleType": 60,
+        #"Specimen_Type": 60,
+        #"Seq_Type": 50,
+        #"Organism": 45,
+        #"Experimental_Setting": 45,
+        #"Model_Type": 45,
+        #"RNA_Library": 15,
+        #"Pert_Dose": 10,
+        #"Pert_Freq": 10,
+        #"Pert_Duration": 10,
+        #"Route_Admin": 10,
     }
     score += field_weights.get(field, 0)
 
@@ -697,8 +984,8 @@ def apply_qa3_mode_policy(tasks_df: pd.DataFrame, cfg: EvidenceVerifierConfig) -
     Apply off/smart/full task-selection policy before LLM calls.
 
     off   = no QA3 LLM tasks.
-    smart = prioritized high-value tasks only.
-    full  = broad QA3 task list, capped by max_tasks.
+    smart = field-targeted prioritized QA3 tasks.
+    full  = field-targeted broad QA3 task list unless qa3_target_fields is ALL.
     """
     mode = _qa3_mode_normalized(cfg.qa3_mode)
 
@@ -710,6 +997,14 @@ def apply_qa3_mode_policy(tasks_df: pd.DataFrame, cfg: EvidenceVerifierConfig) -
     if mode == "off":
         return tasks_df.head(0).copy()
 
+    # First apply field-targeted QA3 filtering.
+    tasks_df = apply_qa3_target_field_filter(tasks_df, cfg)
+
+    if tasks_df.empty:
+        tasks_df = tasks_df.reset_index(drop=True)
+        tasks_df["Task_ID"] = []
+        return tasks_df
+
     max_tasks = cfg.max_tasks
     if max_tasks is None:
         max_tasks = _qa3_default_max_tasks_for_mode(mode)
@@ -717,8 +1012,8 @@ def apply_qa3_mode_policy(tasks_df: pd.DataFrame, cfg: EvidenceVerifierConfig) -
     if mode == "smart":
         tasks_df["_QA3_Smart_Score"] = tasks_df.apply(_qa3_task_priority_score, axis=1)
 
-        # Keep high-value candidates. This threshold keeps Disease/Tissue/Perturbation
-        # issues and drops most low-yield missing dose/duration/frequency/route tasks.
+        # Keep high-value field-targeted candidates after filtering.
+        # Scoring only affects ordering/selection when max_tasks is manually provided.
         tasks_df = tasks_df.loc[tasks_df["_QA3_Smart_Score"] >= 50].copy()
 
         tasks_df = tasks_df.sort_values(
@@ -741,6 +1036,23 @@ def apply_qa3_mode_policy(tasks_df: pd.DataFrame, cfg: EvidenceVerifierConfig) -
     tasks_df["Task_ID"] = [f"EV{i + 1:07d}" for i in range(tasks_df.shape[0])]
     return tasks_df
 
+def _task_count_by_column(df: pd.DataFrame, col: str) -> Dict[str, int]:
+    if df is None or df.empty or col not in df.columns:
+        return {}
+    vc = df[col].fillna("").astype(str).str.strip().replace("", "Blank").value_counts()
+    return {str(k): int(v) for k, v in vc.items()}
+
+
+def _format_task_count_dict(d: Dict[str, int]) -> str:
+    if not d:
+        return "NA"
+    return ", ".join(f"{k}={v}" for k, v in d.items())
+
+
+def _qa3_target_fields_label(cfg: EvidenceVerifierConfig) -> str:
+    fields = normalize_qa3_target_fields(getattr(cfg, "qa3_target_fields", None))
+    return "ALL" if fields is None else ", ".join(fields)
+
 def build_verification_tasks(
     df_stage1: pd.DataFrame,
     stage1_qa1_report: Optional[Path],
@@ -752,12 +1064,23 @@ def build_verification_tasks(
     tasks: List[Dict[str, Any]] = []
     seen: set[Tuple[str, str, str, str]] = set()
 
-    for task in build_tasks_from_stage1_qa1(df_stage1, stage1_qa1_report, cfg):
+    qa1_tasks_raw = build_tasks_from_stage1_qa1(df_stage1, stage1_qa1_report, cfg)
+    before = len(tasks)
+    for task in qa1_tasks_raw:
         add_task(tasks, task, seen)
-    for task in build_tasks_from_stage1_qa2(stage1_qa2_report, cfg):
+    qa1_added = len(tasks) - before
+
+    qa2_tasks_raw = build_tasks_from_stage1_qa2(stage1_qa2_report, cfg)
+    before = len(tasks)
+    for task in qa2_tasks_raw:
         add_task(tasks, task, seen)
-    for task in build_sampling_qc_tasks(df_stage1, tasks, cfg):
+    qa2_added = len(tasks) - before
+
+    sampling_tasks_raw = build_sampling_qc_tasks(df_stage1, tasks, cfg)
+    before = len(tasks)
+    for task in sampling_tasks_raw:
         add_task(tasks, task, seen)
+    sampling_added = len(tasks) - before
 
     priority = {
         "whole_gse_missing_field": 1,
@@ -767,13 +1090,33 @@ def build_verification_tasks(
         "within_gse_conflict_review": 5,
         "evidence_support_sampling_qc": 6,
     }
+
+    base_columns = [
+        "Task_ID", "Task_Source", "Task_Type", "GSE_ID", "GSM_ID", "Target_Field",
+        "Issue_Type", "Severity", "Review_Priority", "Current_Value",
+        "Suggested_Value_From_Rule", "Example_Missing_GSMs", "Issue_Row_JSON",
+    ]
+
     tasks_df = pd.DataFrame(tasks)
+
     if tasks_df.empty:
-        return pd.DataFrame(columns=[
-            "Task_ID", "Task_Source", "Task_Type", "GSE_ID", "GSM_ID", "Target_Field",
-            "Issue_Type", "Severity", "Review_Priority", "Current_Value",
-            "Suggested_Value_From_Rule", "Example_Missing_GSMs", "Issue_Row_JSON",
-        ])
+        out = pd.DataFrame(columns=base_columns)
+        out.attrs["qa3_task_build_summary"] = {
+            "qa1_raw_tasks": len(qa1_tasks_raw),
+            "qa1_added_tasks": qa1_added,
+            "qa2_raw_tasks": len(qa2_tasks_raw),
+            "qa2_added_tasks": qa2_added,
+            "sampling_raw_tasks": len(sampling_tasks_raw),
+            "sampling_added_tasks": sampling_added,
+            "before_policy_tasks": 0,
+            "final_tasks": 0,
+            "target_fields": _qa3_target_fields_label(cfg),
+            "mode": _qa3_mode_normalized(cfg.qa3_mode),
+            "final_task_source_counts": {},
+            "final_target_field_counts": {},
+            "final_task_type_counts": {},
+        }
+        return out
 
     tasks_df["_sort"] = tasks_df["Task_Type"].map(priority).fillna(99)
     tasks_df = tasks_df.sort_values(
@@ -781,9 +1124,34 @@ def build_verification_tasks(
         kind="stable",
     ).drop(columns=["_sort"])
 
-    tasks_df = apply_qa3_mode_policy(tasks_df, cfg)
-    return tasks_df
+    before_policy_tasks = int(tasks_df.shape[0])
+    before_policy_source_counts = _task_count_by_column(tasks_df, "Task_Source")
+    before_policy_target_counts = _task_count_by_column(tasks_df, "Target_Field")
+    before_policy_type_counts = _task_count_by_column(tasks_df, "Task_Type")
 
+    final_df = apply_qa3_mode_policy(tasks_df, cfg)
+
+    final_df.attrs["qa3_task_build_summary"] = {
+        "qa1_raw_tasks": len(qa1_tasks_raw),
+        "qa1_added_tasks": qa1_added,
+        "qa2_raw_tasks": len(qa2_tasks_raw),
+        "qa2_added_tasks": qa2_added,
+        "sampling_raw_tasks": len(sampling_tasks_raw),
+        "sampling_added_tasks": sampling_added,
+        "before_policy_tasks": before_policy_tasks,
+        "before_policy_task_source_counts": before_policy_source_counts,
+        "before_policy_target_field_counts": before_policy_target_counts,
+        "before_policy_task_type_counts": before_policy_type_counts,
+        "final_tasks": int(final_df.shape[0]),
+        "target_fields": _qa3_target_fields_label(cfg),
+        "mode": _qa3_mode_normalized(cfg.qa3_mode),
+        "max_tasks": cfg.max_tasks,
+        "final_task_source_counts": _task_count_by_column(final_df, "Task_Source"),
+        "final_target_field_counts": _task_count_by_column(final_df, "Target_Field"),
+        "final_task_type_counts": _task_count_by_column(final_df, "Task_Type"),
+    }
+
+    return final_df
 
 # -----------------------------------------------------------------------------
 # Evidence packet builder
@@ -806,6 +1174,15 @@ def selected_rows_for_task(gse_df: pd.DataFrame, task: Dict[str, Any], cfg: Evid
         miss_df = gse_df[gse_df[cfg.gsm_col].astype(str).isin(missing_gsms)]
         if not miss_df.empty:
             pieces.append(miss_df)
+
+    affected_gsms = split_gsm_list(task.get("Affected_GSMs", ""))
+    if not affected_gsms:
+        affected_gsms = split_gsm_list(task.get("Example_Affected_GSMs", ""))
+
+    if affected_gsms:
+        affected_df = gse_df[gse_df[cfg.gsm_col].astype(str).isin(affected_gsms)]
+        if not affected_df.empty:
+            pieces.append(affected_df.head(cfg.max_same_gse_examples))
 
     if field in gse_df.columns:
         missing_df = gse_df[gse_df[field].map(is_missing)].head(cfg.max_same_gse_examples // 2)
@@ -862,14 +1239,33 @@ def build_evidence_packet(
         sample_records.append(rec)
 
     missing_gsm_ids: List[str] = []
+
+    affected_gsm_ids = split_gsm_list(task.get("Affected_GSMs", ""))
+    if not affected_gsm_ids:
+        affected_gsm_ids = split_gsm_list(task.get("Example_Affected_GSMs", ""))
+
     affected_current_values: Dict[str, str] = {}
+
     if target_field in gse_df.columns:
         missing_mask = gse_df[target_field].map(is_missing)
-        missing_gsm_ids = gse_df.loc[missing_mask, cfg.gsm_col].astype(str).head(cfg.max_missing_gsm_ids_in_packet).tolist()
+        missing_gsm_ids = (
+            gse_df.loc[missing_mask, cfg.gsm_col]
+            .astype(str)
+            .head(cfg.max_missing_gsm_ids_in_packet)
+            .tolist()
+        )
+
+        if affected_gsm_ids:
+            allowed_gsms = set(affected_gsm_ids)
+        elif clean_value(task.get("GSM_ID", "")):
+            allowed_gsms = {clean_value(task.get("GSM_ID", ""))}
+        else:
+            allowed_gsms = set()
+
         affected_current_values = {
             str(row[cfg.gsm_col]): clean_value(row[target_field])
             for _, row in gse_df[[cfg.gsm_col, target_field]].iterrows()
-            if (not clean_value(task.get("GSM_ID", "")) or str(row[cfg.gsm_col]) == clean_value(task.get("GSM_ID", "")))
+            if not allowed_gsms or str(row[cfg.gsm_col]) in allowed_gsms
         }
 
     distributions = value_distribution(gse_df, [c for c in DESIGN_FIELDS if c in gse_df.columns])
@@ -890,6 +1286,7 @@ def build_evidence_packet(
         "same_gse_field_distributions": distributions,
         "design_signature_summary": design_signatures,
         "missing_gsm_ids_for_target_field": missing_gsm_ids,
+        "affected_gsm_ids_for_task": affected_gsm_ids[: cfg.max_missing_gsm_ids_in_packet],
         "affected_current_values": affected_current_values,
         "sample_records": sample_records,
     }
@@ -908,7 +1305,8 @@ You will receive:
 - GSE_Info and representative GSM_Info records,
 - current annotations for related fields,
 - same-GSE value distributions,
-- a design signature summary.
+- a design signature summary,
+- and sometimes a list of affected GSM IDs from grouped QA issues.
 
 Allowed decisions:
 - Fill All: fill the target field for all currently missing GSMs in this GSE.
@@ -923,9 +1321,10 @@ Rules:
 3. For multi-tissue or multi-perturbation designs, identify subgroups and avoid global propagation.
 4. Use exact evidence from GSE_Info/GSM_Info/Title/Source/Characteristics when available. Evidence can be short excerpts or concise paraphrases.
 5. If evidence supports a value only at study level, use Fill All only for study-level or protocol-level fields such as Organism, Seq_Type, RNA_Library, Experimental_Setting, Model_Type, or GSE_Pert.
-6. Do not invent labels not supported by the evidence.
-7. Prefer Need Human Review when the evidence is ambiguous.
-8. Return strict JSON only. No markdown. No extra text."""
+6. If the task includes affected GSM IDs, prioritize those GSMs. Do not extend a sample-specific correction to unlisted GSMs unless the evidence clearly supports all missing target cells in the GSE.
+7. Do not invent labels not supported by the evidence.
+8. Prefer Need Human Review when the evidence is ambiguous.
+9. Return strict JSON only. No markdown. No extra text."""
 
 REVIEW_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -1142,10 +1541,19 @@ def apply_stage1_qa3_recommendations(
             gse_mask = corrected[cfg.gse_col].astype(str).str.strip().eq(gse_id)
             affected_gsms = corrected.loc[gse_mask & corrected[field].map(is_missing), cfg.gsm_col].astype(str).tolist()
         elif decision == "Fill Subset":
-            # If the LLM did not list IDs, fall back to task missing examples only.
+            # If the LLM did not list IDs, fall back to task-provided affected/missing examples.
+            if not affected_gsms:
+                affected_gsms = split_gsm_list(row.get("Affected_GSMs", ""))
+            if not affected_gsms:
+                affected_gsms = split_gsm_list(row.get("Example_Affected_GSMs", ""))
             if not affected_gsms:
                 affected_gsms = split_gsm_list(row.get("Example_Missing_GSMs", ""))
+
         elif decision == "Correct Field":
+            if not affected_gsms:
+                affected_gsms = split_gsm_list(row.get("Affected_GSMs", ""))
+            if not affected_gsms:
+                affected_gsms = split_gsm_list(row.get("Example_Affected_GSMs", ""))
             if not affected_gsms:
                 gsm_id = clean_value(row.get("GSM_ID", ""))
                 affected_gsms = [gsm_id] if gsm_id else []
@@ -1213,6 +1621,36 @@ def apply_stage1_qa3_recommendations(
 # -----------------------------------------------------------------------------
 # Main pipeline callable
 # -----------------------------------------------------------------------------
+def should_print_progress(done: int, total: int) -> bool:
+    """
+    Throttle progress logging based on the number of executable units.
+
+    For Stage 1, the unit is a metadata chunk.
+    For QA3, the unit is an evidence-verification task.
+    """
+    try:
+        done = int(done)
+        total = int(total)
+    except Exception:
+        return True
+
+    if total <= 0 or done <= 0:
+        return False
+
+    # Always print first and last progress messages.
+    if done == 1 or done == total:
+        return True
+
+    if total <= 20:
+        return True
+
+    if total <= 100:
+        return done % 5 == 0
+
+    if total <= 500:
+        return done % 10 == 0
+
+    return done % 50 == 0
 
 def _qa3_print_progress(
     *,
@@ -1221,6 +1659,9 @@ def _qa3_print_progress(
     recommendations: List[Dict[str, Any]],
     start_time: float,
 ) -> None:
+    if not should_print_progress(done_tasks, total_tasks):
+        return
+
     elapsed = time.perf_counter() - start_time
     pct = (done_tasks / total_tasks * 100.0) if total_tasks else 100.0
     avg = elapsed / done_tasks if done_tasks else 0.0
@@ -1276,8 +1717,47 @@ def run_stage1_qa3_verification_pipeline(
     df_stage1 = ensure_id_cols(df_stage1, cfg)
 
     tasks_df = build_verification_tasks(df_stage1, stage1_qa1_report, stage1_qa2_report, cfg)
+    qa3_task_summary = tasks_df.attrs.get("qa3_task_build_summary", {})
+
+    if qa3_task_summary:
+        print(
+            "[Stage1 QA3] Candidate task summary: "
+            f"QA1-derived={qa3_task_summary.get('qa1_added_tasks', 0):,} "
+            f"(raw={qa3_task_summary.get('qa1_raw_tasks', 0):,}); "
+            f"QA2-derived={qa3_task_summary.get('qa2_added_tasks', 0):,} "
+            f"(raw={qa3_task_summary.get('qa2_raw_tasks', 0):,}); "
+            f"Sampling_QC={qa3_task_summary.get('sampling_added_tasks', 0):,} "
+            f"(raw={qa3_task_summary.get('sampling_raw_tasks', 0):,}); "
+            f"before_policy={qa3_task_summary.get('before_policy_tasks', 0):,}; "
+            f"final_LLM_tasks={qa3_task_summary.get('final_tasks', 0):,}.",
+            flush=True,
+        )
+
+        print(
+            "[Stage1 QA3] Target fields: "
+            f"{qa3_task_summary.get('target_fields', _qa3_target_fields_label(cfg))}.",
+            flush=True,
+        )
+
+        print(
+            "[Stage1 QA3] Final task Target_Field counts: "
+            + _format_task_count_dict(qa3_task_summary.get("final_target_field_counts", {})),
+            flush=True,
+        )
+
+        print(
+            "[Stage1 QA3] Final task Task_Source counts: "
+            + _format_task_count_dict(qa3_task_summary.get("final_task_source_counts", {})),
+            flush=True,
+        )
+
+        print(
+            "[Stage1 QA3] Final task Task_Type counts: "
+            + _format_task_count_dict(qa3_task_summary.get("final_task_type_counts", {})),
+            flush=True,
+        )
     tasks_path = output_dir / f"{run_version}_stage1_qa3_evidence_verification_tasks.xlsx"
-    tasks_df.to_excel(tasks_path, index=False)
+    make_excel_safe_df(tasks_df).to_excel(tasks_path, index=False)
 
     packets: List[Dict[str, Any]] = []
     recommendations: List[Dict[str, Any]] = []
@@ -1373,15 +1853,47 @@ def run_stage1_qa3_verification_pipeline(
     human_path = output_dir / f"{run_version}_stage1_qa3_human_review_queue.xlsx"
     report_path = output_dir / f"{run_version}_stage1_qa3_evidence_verification_report.xlsx"
     packets_jsonl_path = debug_dir / f"{run_version}_stage1_qa3_evidence_packets.jsonl"
+    tasks_jsonl_path = debug_dir / f"{run_version}_stage1_qa3_verification_tasks.jsonl"
 
     corrected.to_excel(corrected_path, index=False)
-    rec_df.to_excel(recommendations_path, index=False)
-    applied_df.to_excel(applied_path, index=False)
-    human_df.to_excel(human_path, index=False)
+    make_excel_safe_df(rec_df).to_excel(recommendations_path, index=False)
+    make_excel_safe_df(applied_df).to_excel(applied_path, index=False)
+    make_excel_safe_df(human_df).to_excel(human_path, index=False)
 
     with packets_jsonl_path.open("w", encoding="utf-8") as f:
         for packet in packets:
             f.write(json.dumps(packet, ensure_ascii=False) + "\n")
+
+    with tasks_jsonl_path.open("w", encoding="utf-8") as f:
+        for rec in tasks_df.to_dict(orient="records"):
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    grouped_issue_rows_represented = 0
+    grouped_task_count = 0
+
+    if not tasks_df.empty and "Grouped_From_QA2" in tasks_df.columns:
+        grouped_task_count = int(
+            tasks_df["Grouped_From_QA2"]
+            .astype(str)
+            .str.upper()
+            .eq("YES")
+            .sum()
+        )
+
+    if not tasks_df.empty and "Grouped_Issue_Count" in tasks_df.columns:
+        if "Task_Source" in tasks_df.columns:
+            qa2_mask = tasks_df["Task_Source"].astype(str).str.contains("Stage1 QA2", regex=False)
+        else:
+            qa2_mask = pd.Series(False, index=tasks_df.index)
+
+        grouped_issue_rows_represented = int(
+            pd.to_numeric(
+                tasks_df.loc[qa2_mask, "Grouped_Issue_Count"],
+                errors="coerce",
+            )
+            .fillna(1)
+            .sum()
+        )
 
     summary = {
         "run_version": run_version,
@@ -1390,16 +1902,18 @@ def run_stage1_qa3_verification_pipeline(
         "n_applied_cell_changes": int(applied_df.shape[0]) if not applied_df.empty else 0,
         "n_accepted_tasks": int(accepted_df.shape[0]) if not accepted_df.empty else 0,
         "n_human_review_tasks": int(human_df.shape[0]) if not human_df.empty else 0,
+        "n_grouped_qa2_tasks": grouped_task_count,
+        "n_qa2_issue_rows_represented_by_tasks": grouped_issue_rows_represented,
         "config": asdict(cfg),
     }
     summary_df = pd.DataFrame([summary])
 
     with pd.ExcelWriter(report_path, engine="openpyxl") as writer:
-        tasks_df.to_excel(writer, sheet_name="Verification_Tasks", index=False)
-        rec_df.to_excel(writer, sheet_name="LLM_Recommendations", index=False)
+        make_excel_safe_df(tasks_df).to_excel(writer, sheet_name="Verification_Tasks", index=False)
+        make_excel_safe_df(rec_df).to_excel(writer, sheet_name="LLM_Recommendations", index=False)
         applied_df.to_excel(writer, sheet_name="Applied_Cell_Changes", index=False)
-        accepted_df.to_excel(writer, sheet_name="Accepted_Task_Summary", index=False)
-        human_df.to_excel(writer, sheet_name="Human_Review_Queue", index=False)
+        make_excel_safe_df(accepted_df).to_excel(writer, sheet_name="Accepted_Task_Summary", index=False)
+        make_excel_safe_df(human_df).to_excel(writer, sheet_name="Human_Review_Queue", index=False)
         summary_df.to_excel(writer, sheet_name="Summary", index=False)
 
     outputs = {
@@ -1410,6 +1924,7 @@ def run_stage1_qa3_verification_pipeline(
         "human_review": human_path,
         "report": report_path,
         "packets_jsonl": packets_jsonl_path,
+        "tasks_jsonl": tasks_jsonl_path,
     }
     return corrected, outputs
 
@@ -1441,6 +1956,17 @@ def main() -> None:
     parser.add_argument("--gsm-col", default="GSM_ID")
     parser.add_argument("--max-tasks", type=int, default=None)
     parser.add_argument(
+        "--qa3-target-fields",
+        "--stage1-qa3-fields",
+        dest="qa3_target_fields",
+        default="GSE_Pert,GSM_Pert,RNA_Source,Tissue",
+        help=(
+            "Comma-separated target fields for field-targeted QA3. "
+            "Default: GSE_Pert,GSM_Pert,RNA_Source,Tissue. "
+            "Use ALL to disable field filtering."
+        ),
+    )
+    parser.add_argument(
         "--stage1-qa3-mode",
         "--qa3-mode",
         dest="stage1_qa3_mode",
@@ -1467,12 +1993,21 @@ def main() -> None:
 
     if args.max_tasks is not None:
         qa3_max_tasks = args.max_tasks
-    elif qa3_mode == "full":
-        qa3_max_tasks = 150
     elif qa3_mode == "off":
         qa3_max_tasks = 0
     else:
-        qa3_max_tasks = 50
+        qa3_max_tasks = None
+
+    qa3_target_fields = normalize_qa3_target_fields(args.qa3_target_fields)
+
+    print(
+        "[Stage1 QA3] Field-targeted QA3 target fields: "
+        + ("ALL" if qa3_target_fields is None else ", ".join(qa3_target_fields))
+    )
+    print(
+        "[Stage1 QA3] Max tasks: "
+        + ("None / uncapped after field filtering" if qa3_max_tasks is None else str(qa3_max_tasks))
+    )
 
     cfg = EvidenceVerifierConfig(
         gse_col=args.gse_col,
@@ -1485,6 +2020,8 @@ def main() -> None:
         allow_nonempty_overwrite=args.allow_nonempty_overwrite,
         include_sampling_qc=(qa3_mode == "full") and not args.skip_sampling_qc,
         include_stage1_qa2_low=args.include_stage1_qa2_low,
+        qa3_target_fields=qa3_target_fields,
+        fields_for_sampling_qc=qa3_target_fields or ("GSE_Pert", "GSM_Pert", "RNA_Source", "Tissue"),
     )
 
     corrected, outputs = run_stage1_qa3_verification_pipeline(
