@@ -1,10 +1,10 @@
 # GEOMeta
 
-![Python](https://img.shields.io/badge/python-3.11-blue)
+![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Status](https://img.shields.io/badge/status-active-success)
 
-LLM-guided metadata extraction, semantic normalization, and ontology-aware metadata standardization framework for GEO transcriptomic studies.
+GEOMeta is an LLM-guided framework for sample-level metadata extraction, semantic standardization, controlled inference, biomedical mapping, and quality-controlled release generation for GEO transcriptomic studies.
 
 ---
 
@@ -12,23 +12,20 @@ LLM-guided metadata extraction, semantic normalization, and ontology-aware metad
 
 GEO metadata are highly heterogeneous across studies due to inconsistent free-text annotations, incomplete sample descriptions, variable disease terminology, fragmented tissue naming conventions, and inconsistent experimental metadata reporting.
 
-GEOMeta addresses these challenges through a multi-stage metadata harmonization framework that combines:
+GEOMeta addresses these challenges through a fixed multi-stage workflow that combines:
 
-- Context-aware metadata extraction
-- Semantic normalization
-- Ontology-aware disease and tissue mapping
-- Controlled perturbation standardization
-- Audit, recovery, and review workflows
+- Context-aware sample-level metadata extraction
+- Field-specific semantic standardization
+- Controlled metadata inference
+- Disease, tissue, RNA-source, and perturbation mapping
+- Deterministic and evidence-grounded quality control
+- Review-aware recovery and release generation
 
-The framework is designed for large-scale cross-study transcriptomic integration and downstream biomedical machine learning applications.
-
-The current curated release comprises 594,989 curated GSM–GSE records, corresponding to 594,304 unique GSM accessions from 22,782 GEO Series and spanning diverse disease, tissue, demographic, and perturbation contexts.
+The current curated GEOMeta release comprises **594,989 GSM samples from 22,782 unique GSE studies**, spanning diverse disease, tissue, demographic, and perturbation contexts.
 
 ---
 
 # Pipeline Overview
-
-GEOMeta multi-stage metadata harmonization workflow for GEO transcriptomic studies.
 
 <p align="center">
   <img src="figures/geometa_workflow.png" width="950">
@@ -38,7 +35,7 @@ GEOMeta multi-stage metadata harmonization workflow for GEO transcriptomic studi
 
 # Installation
 
-## Clone Repository
+## 1. Clone Repository
 
 First, move to the local folder where you want to download GEOMeta:
 
@@ -57,19 +54,11 @@ The git clone command creates a local folder named GEOMeta in the selected works
 
 ---
 
-# GEOMeta Environment and LLM Setup
+## 2. Create a clean conda environment
 
-This guide describes the recommended one-time environment setup and LLM configuration for running the GEOMeta pipeline.
+GEOMeta has been tested with Python 3.11 and 3.12. A clean conda-forge environment is recommended.
 
-GEOMeta uses a provider-agnostic LLM interface based on OpenAI-compatible chat-completion endpoints. The recommended default backend is the direct OpenAI API with GPT-5.
-
----
-
-## 1. Remove inherited library-path overrides
-
-Some local Anaconda installations may inherit library-path variables from the base environment. These variables can cause Python packages in a new conda environment to load incompatible libraries from the base installation.
-
-Before creating the GEOMeta environment, unset these variables:
+If your shell inherits library paths from another Anaconda installation, unset them first:
 
 ```bash
 unset DYLD_LIBRARY_PATH
@@ -77,21 +66,7 @@ unset DYLD_FALLBACK_LIBRARY_PATH
 unset LD_LIBRARY_PATH
 ```
 
-Confirm they are empty:
-
-```bash
-echo "DYLD_LIBRARY_PATH=$DYLD_LIBRARY_PATH"
-echo "DYLD_FALLBACK_LIBRARY_PATH=$DYLD_FALLBACK_LIBRARY_PATH"
-echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
-```
-
-Expected output should be empty after the equals signs.
-
----
-
-## 2. Create a clean conda environment
-
-Create a new conda environment using conda-forge only:
+Create and activate the environment:
 
 ```bash
 conda create -n geometa -c conda-forge --override-channels \
@@ -108,152 +83,142 @@ conda create -n geometa -c conda-forge --override-channels \
   expat \
   libexpat \
   -y
-```
 
-Activate the environment:
-
-```bash
 conda activate geometa
 ```
 
-Confirm that Python is coming from the new environment:
-
-```bash
-which python
-python -c "import sys; print(sys.executable)"
-```
-
-The printed path should include:
-
-```text
-envs/geometa/bin/python
-```
-
----
-
-## 3. Verify the environment
-
-Before running GEOMeta, verify that the Python XML parser works. This is important because GEOMeta reads and writes Excel files through `openpyxl`, and Excel `.xlsx` files depend on XML support.
+Optional dependency check:
 
 ```bash
 python - <<'PY'
-import xml.parsers.expat
-import xml.etree.ElementTree as ET
-
-ET.fromstring("<root><x>ok</x></root>")
-print("XML parser OK")
+import pandas, sklearn, fastparquet, openai, openpyxl, docx, rapidfuzz
+print("GEOMeta dependencies imported successfully.")
 PY
 ```
 
-Then verify the main GEOMeta dependencies:
+## 3. Configure the LLM backend
+
+GEOMeta uses an **OpenAI-compatible Chat Completions interface**. The backend is controlled by four environment variables:
+
+| Variable | Description |
+|---|---|
+| `LLM_API_TYPE` | Use `openai_compatible` for the backends below. |
+| `LLM_BASE_URL` | Base URL of the selected endpoint. |
+| `LLM_API_KEY` | API key or local-server placeholder key. |
+| `LLM_MODEL` | Exact model identifier exposed by the provider or server. |
+
+### Direct OpenAI API
+
+The current GEOMeta configuration defaults to the direct OpenAI endpoint and `gpt-5`.
 
 ```bash
-python - <<'PY'
-import pandas as pd
-import sklearn
-import fastparquet
-import openai
-import openpyxl
-import docx
-import rapidfuzz
-
-print("pandas:", pd.__version__)
-print("sklearn:", sklearn.__version__)
-print("fastparquet OK")
-print("openai:", openai.__version__)
-print("openpyxl:", openpyxl.__version__)
-print("python-docx OK")
-print("rapidfuzz OK")
-PY
-```
-
-If both tests pass, the environment is ready.
-
----
-
-## 4. Direct OpenAI API with GPT-5
-
-GEOMeta uses GPT-5 as the recommended default model for metadata annotation, post-processing, and mapping.
-
-Set the following environment variables:
-
-```bash
-export LLM_API_TYPE=openai_compatible
-export LLM_BASE_URL=https://api.openai.com/v1
+export LLM_API_TYPE="openai_compatible"
+export LLM_BASE_URL="https://api.openai.com/v1"
 export LLM_API_KEY="your_openai_api_key"
-export LLM_MODEL=gpt-5
+export LLM_MODEL="gpt-5"
 ```
 
-Do not save API keys directly in the codebase or commit them to GitHub.
+Users may replace `gpt-5` with another OpenAI model that supports Chat Completions. Model availability and model names can change over time.
 
----
-
-## 5. Other OpenAI-compatible endpoints
-
-GEOMeta can also connect to other OpenAI-compatible endpoints by changing the base URL, API key, and model name.
-
-### LiteLLM proxy
-
-```bash
-export LLM_API_TYPE=openai_compatible
-export LLM_BASE_URL=http://localhost:4000/v1
-export LLM_API_KEY="your_litellm_key"
-export LLM_MODEL=gpt-5
-```
+For direct OpenAI use, `OPENAI_API_KEY` and `OPENAI_MODEL` are also accepted as aliases, although the generic `LLM_*` variables are recommended for easier provider switching.
 
 ### OpenRouter
 
 ```bash
-export LLM_API_TYPE=openai_compatible
-export LLM_BASE_URL=https://openrouter.ai/api/v1
+export LLM_API_TYPE="openai_compatible"
+export LLM_BASE_URL="https://openrouter.ai/api/v1"
 export LLM_API_KEY="your_openrouter_key"
-export LLM_MODEL="openai/gpt-5"
+export LLM_MODEL="deepseek/deepseek-v4-flash-0731"
+```
+
+The model above is an example configuration used during GEOMeta testing. Replace it with another model identifier available through your OpenRouter account if desired.
+
+<details>
+<summary><strong>Other OpenAI-compatible backends</strong></summary>
+
+### LiteLLM proxy
+
+For a local LiteLLM proxy running on its default port:
+
+```bash
+export LLM_API_TYPE="openai_compatible"
+export LLM_BASE_URL="http://localhost:4000"
+export LLM_API_KEY="your_litellm_key"
+export LLM_MODEL="<MODEL-NAME-CONFIGURED-IN-LITELLM>"
 ```
 
 ### Local vLLM server
 
 ```bash
-export LLM_API_TYPE=openai_compatible
-export LLM_BASE_URL=http://localhost:8000/v1
-export LLM_API_KEY=dummy
-export LLM_MODEL="local-model-name"
+export LLM_API_TYPE="openai_compatible"
+export LLM_BASE_URL="http://localhost:8000/v1"
+export LLM_API_KEY="your_vllm_api_key"
+export LLM_MODEL="<VLLM-MODEL-NAME>"
 ```
 
-### Local Ollama or LM Studio OpenAI-compatible endpoint
+If the server was started without authentication, GEOMeta still requires a non-empty `LLM_API_KEY`; a placeholder value can be used.
+
+### Local Ollama server
 
 ```bash
-export LLM_API_TYPE=openai_compatible
-export LLM_BASE_URL=http://localhost:11434/v1
-export LLM_API_KEY=dummy
-export LLM_MODEL="llama3.1"
+export LLM_API_TYPE="openai_compatible"
+export LLM_BASE_URL="http://localhost:11434/v1"
+export LLM_API_KEY="ollama"
+export LLM_MODEL="<OLLAMA-MODEL-NAME>"
 ```
 
-Other models can be used, but annotation quality should be evaluated before production-scale use.
+For local Ollama, the API-key value is required by the client but is normally ignored by the server.
+
+### Local LM Studio server
+
+```bash
+export LLM_API_TYPE="openai_compatible"
+export LLM_BASE_URL="http://localhost:1234/v1"
+export LLM_API_KEY="lm-studio"
+export LLM_MODEL="<LM-STUDIO-MODEL-ID>"
+```
+
+Use the model identifier shown for the model loaded in LM Studio.
+
+</details>
+
+### Verify the active LLM configuration
+
+From the GEOMeta repository root:
+
+```bash
+python - <<'PY'
+from pathlib import Path
+from geo_annotation_agent.config import default_config
+
+cfg = default_config(Path("."))
+cfg.validate_env()
+
+print("LLM_API_TYPE:", cfg.llm_api_type)
+print("LLM_BASE_URL:", cfg.llm_base_url)
+print("LLM_MODEL:", cfg.llm_model)
+print("LLM configuration detected successfully.")
+PY
+```
+
+This verifies that GEOMeta can read the selected backend configuration without printing the API key.
+
+Model choice can affect annotation quality, runtime, API cost, and supported context length. For local or smaller-context models, make sure the model context window is compatible with the token-budget settings in `geo_annotation_agent/config.py` before running very large GSEs.
+
+> Do not store API keys directly in the codebase or commit them to GitHub.
 
 ---
+# Running GEOMeta
 
-## 6. Run the full GEOMeta pipeline
+## 1. Prepare the GSE input
 
-Run the following commands from the GEOMeta project folder. Replace `/path/to/GEOMeta` with the location where you cloned or downloaded this repository on your own computer.
-
-```bash
-cd "/path/to/GEOMeta"
-```
-
-Check that you are in the correct folder:
-
-```bash
-ls
-```
-You should see folders such as `scripts`, `geo_annotation_agent`, `Annotation_Prompts`, `postprocessing`, `inference`, `input`, and `mappings`.
-
-The repository includes an example GSE input file in the `input/` folder:
+The repository includes an example input file:
 
 ```text
 input/gse_ids.csv
 ```
 
-This file should contain a column named `GSE_ID`, for example:
+The file should contain a column named `GSE_ID`:
 
 ```text
 GSE_ID
@@ -261,29 +226,177 @@ GSE130063
 GSE53779
 ```
 
-GEOMeta accepts GSE accession lists in CSV (.csv), Excel (.xlsx), tab-separated (.tsv), and plain-text (.txt) formats. Additional input examples and formatting instructions are provided in
-input/README.md.
+Replace the example accessions with your own GSE list. Supported input formats also include Excel, TSV, and TXT.
 
-Run the full pipeline:
+## 2. Run the full pipeline
+
+For routine annotation runs:
 
 ```bash
-PYTHONPATH=. python scripts/run_pipeline.py \
+PYTHONPATH=. python -u scripts/run_pipeline.py \
   --workdir . \
-  --gse-file input/gse_ids.csv
+  --gse-file input/gse_ids.csv \
+  --run-version geometa_run \
+  --stage1-qa3-mode smart
 ```
 
-The `--workdir .` argument tells GEOMeta to use the current folder as the project working directory.
+Main arguments:
 
-The input file can also be Excel, TSV, or TXT if supported by the runner script. CSV is recommended because it is simple and avoids Excel parser issues during input loading.
+- `--workdir .` uses the current repository root as the working directory.
+- `--gse-file` specifies the GSE input file.
+- `--run-version` defines the prefix used for generated outputs.
+- `--stage1-qa3-mode smart` enables prioritized, targeted QA3 review.
 
+### QA3 modes
+
+- `smart` — Recommended for routine use. Performs targeted evidence-grounded review of selected fields and samples requiring additional validation.
+- `full` — Runs the broader QA3 workflow for comprehensive auditing or benchmarking.
+- `off` — Disables QA3 review.
+
+Eligible high-confidence QA3 corrections can be applied according to the configured release policy, while unresolved or ambiguous cases are retained for review.
+
+## 3. Run a single GSE
+
+```bash
+PYTHONPATH=. python -u scripts/run_pipeline.py \
+  --workdir . \
+  --gse GSE130063 \
+  --run-version geometa_GSE130063 \
+  --stage1-qa3-mode smart
+```
 
 ---
 
-## 7. Run individual stages
+# Pipeline Stages
 
-If a previous stage has already completed, downstream stages can be run directly.
+## Stage 0 — GEO Retrieval and Preparation
 
-### Stage 2 from saved Stage 1 output
+Retrieves GSE- and GSM-level metadata directly from NCBI GEO and constructs annotation-ready metadata blocks.
+
+Key features include local caching, retry/recovery, metadata- and token-aware chunking, and structured GSE/GSM metadata preparation.
+
+Implemented in:
+
+```text
+geo_annotation_agent/stage0_retrieve.py
+```
+
+## Stage 1 — Sample-Level Metadata Annotation
+
+Performs structured GSM-level metadata extraction through four task-specific annotation agent calls covering experimental context, biological context, perturbation, and sample metadata.
+
+Each call combines GEO study/sample context, task-specific instructions, restricted target fields, and a structured output contract. The outputs are merged into the canonical 27-field GEOMeta sample-level schema.
+
+Stage 1 is followed by deterministic within-GSE consistency checks, cross-field validation, and optional evidence-grounded QA3 review.
+
+Implemented in:
+
+```text
+geo_annotation_agent/stage1_annotate.py
+```
+
+Prompts:
+
+```text
+Annotation_Prompts/
+```
+
+## Stage 2 — Field-Specific Standardization and Controlled Inference
+
+Stage 2 applies **21 field-specific standardization agent tasks**. Each combines a reusable prompt template, candidate terms from one metadata field, field-restricted instructions, and a structured output contract.
+
+Three controlled-inference tasks are also performed:
+
+- Age group from standardized age
+- Sex from clearly sex-specific tissue context when sex is otherwise unavailable
+- Perturbation type from the standardized perturbation term
+
+If a field contains no eligible non-missing terms, GEOMeta preserves the input value without making an unnecessary LLM call.
+
+Implemented in:
+
+```text
+geo_annotation_agent/stage2_postprocess.py
+```
+
+Prompts:
+
+```text
+postprocessing/
+inference/
+```
+
+## Stage 3 — Biomedical Mapping and Release Validation
+
+Stage 3 links standardized metadata to curated biomedical vocabularies and external reference resources through reviewed mapping reuse, task-specific LLM-assisted mapping or semantic matching where applicable, and deterministic reference lookup.
+
+Major workflows include:
+
+- **Disease:** CTD/MEDIC mapping and disease hierarchy information
+- **Tissue:** curated GEOMeta tissue vocabulary
+- **RNA source:** reviewed mappings and cell-line reference matching
+- **Chemical perturbations:** reviewed mapping reuse and PubChem lookup with title/synonym verification
+- **Release validation:** deterministic checks of mapped fields, category consistency, within-GSE/global consistency, and perturbation mapping integrity
+
+Implemented in:
+
+```text
+geo_annotation_agent/stage3_map.py
+geo_annotation_agent/stage4_validate_release.py
+```
+
+Mapping resources:
+
+```text
+mappings/
+```
+
+---
+
+# Output Files
+
+Runtime files are generated under:
+
+```text
+artifacts/
+```
+
+Main subdirectories:
+
+```text
+artifacts/
+├── outputs/
+├── ledgers/
+├── mapping_cache/
+├── review_queue/
+├── manual_review/
+├── geo_cache/
+└── runs/
+```
+
+Representative outputs:
+
+| File | Description |
+|---|---|
+| `*_stage0_input.parquet` | Full-fidelity GEO retrieval output |
+| `*_stage1_raw.xlsx` | Raw Stage 1 sample-level annotations |
+| `*_stage1_final_for_stage2.xlsx` | Stage 1 output after QA |
+| `*_stage2_post_final.xlsx` | Final Stage 2 standardized annotations |
+| `*_stage3_mapped.xlsx` | Full mapped dataset |
+| `*_stage3_mapped_filtered.xlsx` | Filtered mapped dataset |
+| `*_stage3_final_release.xlsx` | Simplified final release dataset |
+| `*_stage3_cp_perturbation_release.xlsx` | Chemical perturbation-focused release |
+| `*_stage4_release_mapping_qa.xlsx` | Deterministic release-level mapping QA report |
+
+The pipeline also generates review queues, ledgers, caches, novel-term reports, and a run-level output index.
+
+---
+
+# Running Individual Stages
+
+The full pipeline is recommended for most users. Downstream stages can also be rerun from saved outputs.
+
+## Stage 2
 
 ```bash
 PYTHONPATH=. python scripts/run_stage2.py \
@@ -292,7 +405,7 @@ PYTHONPATH=. python scripts/run_stage2.py \
   --run-version <run_version>
 ```
 
-### Stage 3 from saved Stage 2 output
+## Stage 3
 
 ```bash
 PYTHONPATH=. python scripts/run_stage3.py \
@@ -301,26 +414,48 @@ PYTHONPATH=. python scripts/run_stage3.py \
   --run-version <run_version>
 ```
 
-Replace `<run_version>` with the actual run version printed by the pipeline.
+Replace `<run_version>` with the identifier used for the corresponding run.
 
 ---
 
+# Repository Structure
 
-## 8. Troubleshooting
-
-### Error: `No module named expat` or `Symbol not found ... libexpat`
-
-This indicates that Python is loading an incompatible XML library from outside the active conda environment.
-
-First check whether library-path variables are set:
-
-```bash
-echo "DYLD_LIBRARY_PATH=$DYLD_LIBRARY_PATH"
-echo "DYLD_FALLBACK_LIBRARY_PATH=$DYLD_FALLBACK_LIBRARY_PATH"
-echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+```text
+scripts/                Pipeline execution scripts
+geo_annotation_agent/   Core pipeline implementation
+Annotation_Prompts/     Stage 1 annotation prompts
+postprocessing/         Stage 2 standardization prompts
+inference/              Controlled-inference prompts
+mappings/               Mapping resources and reviewed reference files
+input/                  Input GSE accession lists
+figures/                Workflow figures and diagrams
+artifacts/              Runtime outputs, caches, ledgers, and review files
 ```
 
-If any of these contain a path such as `/Library/anaconda3/lib`, unset them:
+---
+
+# Current Mapping and Reference Resources
+
+- **Disease:** CTD/MEDIC and MeSH-compatible disease hierarchy information
+- **Tissue:** curated GEOMeta tissue vocabulary and brain-region normalization
+- **Chemical perturbations:** reviewed mappings and PubChem
+- **RNA source/cell lines:** reviewed RNA-source mappings and cell-line reference metadata
+
+---
+
+# Caching and Reproducibility
+
+GEOMeta maintains persistent runtime caches for GEO retrieval, field-specific standardization, controlled inference, and biomedical mapping.
+
+Intermediate outputs, ledgers, caches, and review artifacts support restart, auditing, and iterative refinement. If prompt rules or mapping resources are intentionally changed, clear the corresponding runtime cache before evaluating the updated configuration.
+
+---
+
+# Troubleshooting
+
+### `No module named expat` or XML-library errors
+
+If library paths point to another Anaconda/Python installation:
 
 ```bash
 unset DYLD_LIBRARY_PATH
@@ -328,355 +463,59 @@ unset DYLD_FALLBACK_LIBRARY_PATH
 unset LD_LIBRARY_PATH
 ```
 
-Then create the GEOMeta environment again using the setup commands above.
+Then recreate the GEOMeta conda environment.
 
-### Error: `ModuleNotFoundError: No module named 'openai'`
+### `ModuleNotFoundError`
 
-Install `openai` through conda-forge inside the active environment:
+Confirm that the environment is active:
 
 ```bash
 conda activate geometa
-conda install -c conda-forge openai -y
 ```
 
-Then test:
+Install the missing package from conda-forge if needed.
 
-```bash
-python - <<'PY'
-import openai
-print("openai:", openai.__version__)
-PY
-```
-
-### Error: `Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'`
-
-This means pandas cannot write Parquet files. Install `fastparquet`:
+### Parquet engine error
 
 ```bash
 conda install -c conda-forge fastparquet -y
 ```
 
-### Error: shell shows `>` after a multi-line command
+### Shell shows `>` after a multi-line command
 
-This usually means the last line ended with a backslash. In shell commands, the final line should not end with `\`.
+The final line of a multi-line shell command should not end with `\`.
 
-Correct:
+### `cd: too many arguments`
 
-```bash
-PYTHONPATH=. python scripts/run_pipeline.py \
-  --workdir . \
-  --gse-file input/gse_ids.csv
-```
-
-Incorrect:
+Wrap paths containing spaces in quotation marks:
 
 ```bash
-PYTHONPATH=. python scripts/run_pipeline.py \
-  --workdir . \
-  --gse-file input/gse_ids.csv \
+cd "/path/containing spaces/GEOMeta"
 ```
 
-### Error: `cd: too many arguments`
-
-This happens when the path contains spaces. Wrap the path in quotes:
-
-```bash
-cd "/path/to/GEOMeta"
-```
-
-### Error: `GSE input file not found`
-
-This means the file provided to `--gse-file` does not exist at the expected path.
-
-Check that the file exists:
+### `GSE input file not found`
 
 ```bash
 ls -lh input/gse_ids.csv
 ```
 
-If needed, create a small CSV test file:
-
-```bash
-mkdir -p input
-
-cat > input/gse_ids.csv <<'EOF'
-GSE_ID
-GSE147493
-GSE116860
-EOF
-```
-
-Then rerun the pipeline.
-
-
----
-
-## 9. Prompt templates and agent execution
-
-In GEOMeta, an agent is a runtime LLM invocation configured with task-specific
-instructions, a defined metadata context, restricted target fields, and a
-structured output contract. The Markdown files in `Annotation_Prompts/`,
-`postprocessing/`, `inference/`, and the field-specific directories under
-`mappings/` contain reusable prompt templates for these agent tasks; the files
-themselves are not standalone autonomous agents.
-
-| Repository directory | Workflow component |
-|---|---|
-| `Annotation_Prompts/` | Stage 1 task-specific annotation-agent prompts |
-| `postprocessing/` | Stage 2 field-standardization prompts |
-| `inference/` | Stage 2 controlled-inference prompts |
-| `mappings/` | Stage 3 mapping prompts and reviewed mapping resources |
-| `geo_annotation_agent/` | Workflow orchestration, LLM execution, validation, and recovery |
-
----
-
-## 10. Pipeline Stages
-
-### Stage 0 — GEO Retrieval
-
-Retrieves GEO metadata directly from NCBI GEO and constructs annotation-ready study/sample metadata blocks.
-
-### Key Features
-
-- Local GEO cache system
-- Automatic retry/recovery
-- Chunked GSM batching
-- Structured GSE/GSM metadata generation
-
-Implemented in:
-
-```text
-geo_annotation_agent/stage0_retrieve.py
-```
-
----
-
-### Stage 1 — LLM Metadata Annotation
-
-Performs structured metadata extraction using four task-specific annotation.
-
-### Representative Extracted Metadata Fields
-
-- Disease
-- Tissue
-- Experimental setting
-- Perturbation, dose, frequency, duration
-- RNA library
-- Age
-- Sex
-- Ethnicity
-- Specimen type
-- Timepoint
-- Outcome
-- Organism
-- Genotype
-- Strain
-
-### Key Features
-
-- Task-specific extraction with restricted output fields
-- Shared GSE- and GSM-level metadata context
-- Structured JSON enforcement
-- Multi-GSM chunk annotation
-- Recovery logic for malformed outputs
-- Audit and review logging
-
-Implemented in:
-
-```text
-geo_annotation_agent/stage1_annotate.py
-```
-
----
-
-### Stage 2 — Field-Level Standardization and Controlled Inference
-
-Applies 21 field-specific standardization agent tasks and three controlled-inference agent tasks to Stage 1 outputs.
-
-### Field-Standardization Tasks
-
-- Disease normalization
-- Tissue normalization
-- Experimental-setting normalization
-- RNA-source normalization
-- Age, dose, duration, and unit standardization
-- Perturbation-name and related-field standardization
-
-### Controlled-Inference Tasks
-
-- Age-group derivation from standardized age
-- Perturbation-type classification
-- Restricted sex inference from clearly sex-specific anatomical context
-
-### Key Features
-
-- Field-specific post-processing prompts
-- Cached normalization mappings
-- Deterministic preprocessing
-- Field-specific terminology, format, and unit harmonization
-- Selective rerun/review system
-
-Implemented in:
-
-```text
-geo_annotation_agent/stage2_postprocess.py
-```
-
----
-
-### Stage 3 — Controlled-Vocabulary and External-Resource Mapping
-
-Maps standardized metadata to curated biomedical ontologies and external resources.
-
-### Disease Mapping
-
-Disease annotations are mapped to:
-
-- CTD MEDIC disease ontology
-- MeSH-compatible disease identifiers
-- Disease hierarchy metadata
-
-### Tissue Mapping
-
-Tissue annotations are normalized into curated tissue categories.
-
-### Compound Mapping
-
-Chemical perturbations are mapped to:
-
-- PubChem compounds
-- CID identifiers
-- Canonical SMILES
-- PubChem URLs
-
-### RNA-Source Mapping
-
-RNA-source annotations are mapped using reviewed source mappings and, for cell-line terms, a DepMap cell-line model reference.
-
-### Key Features
-
-- Prior curated mapping reuse
-- LLM-assisted ontology matching
-- TF-IDF candidate retrieval
-- Synonym-aware matching
-- PubChem integration
-- Novel-term detection
-- Review/correction workflows
-
-Implemented in:
-
-```text
-geo_annotation_agent/stage3_map.py
-```
-
----
-
-Final release validation is performed by `geo_annotation_agent/stage4_validate_release.py`. This is a deterministic validation and release-checking step rather than an additional LLM-agent stage.
-
-# Example Final Metadata Fields
-
-- Disease
-- Broad_Disease_Category
-- Tissue
-- RNA_Library
-- Experimental_Setting
-- GSE_Pert
-- GSM_Pert
-- Perturbation
-- Pert_Type
-- Age
-- Age_Group
-- Sex
-
----
-
-# Output Files
-
-Main outputs are written to:
-
-```text
-artifacts/outputs/
-```
-
-| File | Description |
-|---|---|
-| `*_stage0_input.parquet` | GEO retrieval output |
-| `*_stage1_raw.xlsx` | Raw LLM annotations |
-| `*_stage2_post_final.xlsx` | Standardized and controlled-inference annotations |
-| `*_stage3_mapped.xlsx` | Full ontology-mapped dataset |
-| `*_stage3_mapped_filtered.xlsx` | Filtered mapped dataset |
-| `*_stage3_final_release.xlsx` | Simplified final release dataset |
-| `*_stage3_cp_perturbation_release.xlsx` | Compound perturbation-focused release dataset |
-
-Additional artifacts include:
-
-- Mapping caches
-- GEO caches
-- Review ledgers
-- Novel term reports
-- Manual review files
-
----
-
-# Current Ontology Resources
-
-## Disease
-
-- CTD MEDIC
-- MeSH-compatible disease hierarchy
-
-## Compounds
-
-- PubChem
-
-## Tissue
-
-- Curated tissue vocabulary
-- Brain-region normalization framework
-
----
-
-# Caching and Reproducibility
-
-GEOMeta maintains persistent caches for:
-
-- GEO downloads
-- LLM normalization mappings
-- Ontology mapping results
-
-All intermediate outputs, caches, mappings, and review artifacts are retained to support reproducibility and iterative refinement.
-
 ---
 
 # Notes
 
-- GEO metadata quality varies substantially across studies.
-- Some annotations may still require manual review.
-- LLM outputs are constrained through structured prompts, schema validation, and recovery logic.
-- Large-scale runs may require substantial LLM API quota depending on dataset size and model selection.
-
----
-
-# Citation
-
-If you use GEOMeta in your work, please cite:
-
-```text
-Citation information will be added after manuscript publication.
-```
-
----
-
-# License
-
-MIT License
+- GEO metadata completeness and quality vary substantially across studies.
+- Source metadata may contain ambiguous, missing, or inconsistent descriptions that cannot always be resolved automatically.
+- LLM outputs are constrained through task-specific instructions, structured output contracts, deterministic checks, and review-aware workflows.
+- Large-scale processing may require substantial LLM API quota depending on dataset size, metadata complexity, selected model, and QA configuration.
 
 ---
 
 # Acknowledgments
 
-- NCBI GEO
-- CTD MEDIC
+GEOMeta makes use of data and reference resources from:
+
+- NCBI Gene Expression Omnibus (GEO)
+- Comparative Toxicogenomics Database (CTD/MEDIC)
 - PubChem
 - Human Protein Atlas
-- OpenAI
+- Cancer Dependency Map (DepMap), Broad Institute
