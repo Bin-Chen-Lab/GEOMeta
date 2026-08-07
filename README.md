@@ -34,7 +34,7 @@ The current curated GEOMeta release comprises **594,989 GSM samples from 22,782 
 
 # Installation
 
-## Clone Repository
+## 1. Clone Repository
 
 First, move to the local folder where you want to download GEOMeta:
 
@@ -97,41 +97,119 @@ PY
 
 ## 3. Configure the LLM backend
 
-GEOMeta uses OpenAI-compatible chat-completion endpoints.
+GEOMeta uses an **OpenAI-compatible Chat Completions interface**. The backend is controlled by four environment variables:
+
+| Variable | Description |
+|---|---|
+| `LLM_API_TYPE` | Use `openai_compatible` for the backends below. |
+| `LLM_BASE_URL` | Base URL of the selected endpoint. |
+| `LLM_API_KEY` | API key or local-server placeholder key. |
+| `LLM_MODEL` | Exact model identifier exposed by the provider or server. |
+
+### Direct OpenAI API
+
+The current GEOMeta configuration defaults to the direct OpenAI endpoint and `gpt-5`.
 
 ```bash
 export LLM_API_TYPE="openai_compatible"
-export LLM_BASE_URL="<OPENAI-COMPATIBLE-API-ENDPOINT>"
-export LLM_MODEL="<MODEL-NAME>"
+export LLM_BASE_URL="https://api.openai.com/v1"
+export LLM_API_KEY="your_openai_api_key"
+export LLM_MODEL="gpt-5"
 ```
 
-Enter the API key without displaying it:
+Users may replace `gpt-5` with another OpenAI model that supports Chat Completions. Model availability and model names can change over time.
 
-```bash
-read -s LLM_API_KEY
-export LLM_API_KEY
-echo
-```
+For direct OpenAI use, `OPENAI_API_KEY` and `OPENAI_MODEL` are also accepted as aliases, although the generic `LLM_*` variables are recommended for easier provider switching.
 
-For example, for OpenRouter:
+### OpenRouter
 
 ```bash
 export LLM_API_TYPE="openai_compatible"
 export LLM_BASE_URL="https://openrouter.ai/api/v1"
-export LLM_MODEL="<OPENROUTER-MODEL-ID>"
+export LLM_API_KEY="your_openrouter_key"
 export LLM_MODEL="deepseek/deepseek-v4-flash-0731"
 ```
 
-Other OpenAI-compatible endpoints can be used by changing `LLM_BASE_URL`, `LLM_MODEL`, and `LLM_API_KEY`.
+The model above is an example configuration used during GEOMeta testing. Replace it with another model identifier available through your OpenRouter account if desired.
 
-Model choice can affect annotation quality, runtime, and API cost. Alternative models should be evaluated before production-scale use.
+<details>
+<summary><strong>Other OpenAI-compatible backends</strong></summary>
+
+### LiteLLM proxy
+
+For a local LiteLLM proxy running on its default port:
+
+```bash
+export LLM_API_TYPE="openai_compatible"
+export LLM_BASE_URL="http://localhost:4000"
+export LLM_API_KEY="your_litellm_key"
+export LLM_MODEL="<MODEL-NAME-CONFIGURED-IN-LITELLM>"
+```
+
+### Local vLLM server
+
+```bash
+export LLM_API_TYPE="openai_compatible"
+export LLM_BASE_URL="http://localhost:8000/v1"
+export LLM_API_KEY="your_vllm_api_key"
+export LLM_MODEL="<VLLM-MODEL-NAME>"
+```
+
+If the server was started without authentication, GEOMeta still requires a non-empty `LLM_API_KEY`; a placeholder value can be used.
+
+### Local Ollama server
+
+```bash
+export LLM_API_TYPE="openai_compatible"
+export LLM_BASE_URL="http://localhost:11434/v1"
+export LLM_API_KEY="ollama"
+export LLM_MODEL="<OLLAMA-MODEL-NAME>"
+```
+
+For local Ollama, the API-key value is required by the client but is normally ignored by the server.
+
+### Local LM Studio server
+
+```bash
+export LLM_API_TYPE="openai_compatible"
+export LLM_BASE_URL="http://localhost:1234/v1"
+export LLM_API_KEY="lm-studio"
+export LLM_MODEL="<LM-STUDIO-MODEL-ID>"
+```
+
+Use the model identifier shown for the model loaded in LM Studio.
+
+</details>
+
+### Verify the active LLM configuration
+
+From the GEOMeta repository root:
+
+```bash
+python - <<'PY'
+from pathlib import Path
+from geo_annotation_agent.config import default_config
+
+cfg = default_config(Path("."))
+cfg.validate_env()
+
+print("LLM_API_TYPE:", cfg.llm_api_type)
+print("LLM_BASE_URL:", cfg.llm_base_url)
+print("LLM_MODEL:", cfg.llm_model)
+print("LLM configuration detected successfully.")
+PY
+```
+
+This verifies that GEOMeta can read the selected backend configuration without printing the API key.
+
+Model choice can affect annotation quality, runtime, API cost, and supported context length. For local or smaller-context models, make sure the model context window is compatible with the token-budget settings in `geo_annotation_agent/config.py` before running very large GSEs.
 
 > Do not store API keys directly in the codebase or commit them to GitHub.
 
 ---
-# Running GEOMeta
+## 4. Running GEOMeta
 
-## 1. Prepare the GSE input
+1). Prepare the GSE input
 
 The repository includes an example input file:
 
@@ -147,9 +225,9 @@ GSE130063
 GSE53779
 ```
 
-Replace the example accessions with your own GSE list. CSV is recommended; supported input formats also include Excel, TSV, and TXT.
+Replace the example accessions with your own GSE list. Supported input formats also include Excel, TSV, and TXT.
 
-## 2. Run the full pipeline
+2). Run the full pipeline
 
 For routine annotation runs:
 
@@ -168,7 +246,7 @@ Main arguments:
 - `--run-version` defines the prefix used for generated outputs.
 - `--stage1-qa3-mode smart` enables prioritized, targeted QA3 review.
 
-### QA3 modes
+3) QA3 modes
 
 - `smart` — Recommended for routine use. Performs targeted evidence-grounded review of selected fields and samples requiring additional validation.
 - `full` — Runs the broader QA3 workflow for comprehensive auditing or benchmarking.
@@ -176,7 +254,7 @@ Main arguments:
 
 Eligible high-confidence QA3 corrections can be applied according to the configured release policy, while unresolved or ambiguous cases are retained for review.
 
-## 3. Run a single GSE
+4). Run a single GSE
 
 ```bash
 PYTHONPATH=. python -u scripts/run_pipeline.py \
@@ -188,7 +266,7 @@ PYTHONPATH=. python -u scripts/run_pipeline.py \
 
 ---
 
-# Pipeline Stages
+##5. Pipeline Stages
 
 ## Stage 0 — GEO Retrieval and Preparation
 
@@ -431,21 +509,6 @@ ls -lh input/gse_ids.csv
 
 ---
 
-# Citation
-
-If you use GEOMeta in your work, please cite:
-
-```text
-Citation information will be added after manuscript publication.
-```
-
----
-
-# License
-
-MIT License
-
----
 
 # Acknowledgments
 
@@ -455,3 +518,4 @@ GEOMeta makes use of data and reference resources from:
 - Comparative Toxicogenomics Database (CTD/MEDIC)
 - PubChem
 - Human Protein Atlas
+- Cancer Dependency Map (DepMap), Broad Institute
