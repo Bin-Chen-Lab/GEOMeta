@@ -1,5 +1,6 @@
-Role: Biological Context
-Annotate only the following field for each GSM sample in this role: Disease. Do not annotate any other fields in this role.
+Agent task: Biological-context annotation
+
+Annotate only the following field for each GSM sample in this agent task: Disease. Do not annotate fields outside this assigned field set.
 
 12. Disease: 1) When annotating the Disease field, carefully review both GSE and GSM details to determine the specific disease or medical condition associated with the given GSM sample. Use the exact disease names as provided or commonly accepted. Capitalize the first letter of each word in the disease name. Avoid abbreviations.
 
