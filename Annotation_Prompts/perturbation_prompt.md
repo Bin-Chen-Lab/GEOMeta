@@ -1,6 +1,6 @@
-Role: Perturbation
-Annotate only the following fields for each GSM sample in this role:
-GSE_Pert, GSM_Pert, Pert, Pert_Dose, Pert_Freq, Pert_Duration, Route_Admin. Do not annotate any other fields in this role.
+Agent task: Perturbation annotation
+
+Annotate only the following fields for each GSM sample in this agent task: GSE_Pert, GSM_Pert, Pert, Pert_Dose, Pert_Freq, Pert_Duration, Route_Admin. Do not annotate fields outside this assigned field set.
 
 Identify the presence of Perturbations, which may include details such as dose, frequency, and duration.
 - Prioritizing Information Sources: GSM Information should be your main reference for sample-specific details. Use GSE Information for general experiment context or when GSM details are missing.
@@ -8,7 +8,7 @@ Identify the presence of Perturbations, which may include details such as dose, 
 - For multiple Perturbations, list doses, frequencies and durations in the same order as the Perturbations, separated by ' + '.
 - Avoid assumptions and unsupported inference. Only use information explicitly provided in the GSE or GSM records. Do not assume doses, frequencies, or durations.
 Annotate as 'NA' for each field when information for those specific fields is not available or not applicable. Do not leave fields blank. 
-Annotate all assigned perturbation-related fields for each GSM sample in this role. 
+Annotate all assigned perturbation-related fields for each GSM sample in this agent task. 
 
 13. GSE_Pert: It indicates whether the overall experiment described in the GSE information involves any Perturbations. It reflects whether the study includes any deliberate interventions applied to the samples. Carefully review GSE Summary and GSE Overall Design to determine if the study includes Perturbations.
 Perturbations can be: 
@@ -96,8 +96,12 @@ Pert_Dose: '5 mg/kg + 10 mg/kg'
 Pert_Freq: 'Once daily + Once daily'
 Pert_Duration: '2 weeks + 2 weeks'
                 
-19. Route_Admin: When annotating the Route_Admin through which a unique Perturbation or drug was administered to the sample, select from the following standardized options: Intraperitoneal for injection into the peritoneal cavity, Intravenous for injection directly into a vein, Oral for administration by mouth, Subcutaneous for injection into the tissue layer between the skin and muscle, Intramuscular for injection directly into a muscle, Topical for application directly to the skin or mucous membranes, Inhalation for administration through the respiratory tract, Intranasal for administration through the nasal passages, Intracerebral for injection directly into brain tissue, Intraventricular for injection into the brain's ventricles, Intrathecal for injection into the spinal canal, Ocular for administration directly to the eye, and Transdermal for absorption through the skin, typically via a patch. If the drug was added to the culture media, annotate as 'In Media' without specifying the drug name. If multiple drugs were used, list the corresponding routes of administration in the order they appear, separated by ‘+’.
+19. Route_Admin: When annotating the Route_Admin through which a unique Perturbation or drug was administered to the sample, select from the following standardized options: 
 
-If only 'injection' is mentioned without specifying the route, annotate as 'Injection (unspecified)' and seek further clarification if possible. Use 'Other [specify]' if the route does not fit into any of the predefined categories, and replace [specify] with the specific route used. If no unique route is applicable or if no drug was used, annotate as 'NA.' It is crucial to maintain the exact case format and avoid variations in upper and lower case, as well as special characters, to ensure consistency across all annotations.
+Intraperitoneal for injection into the peritoneal cavity, Intravenous for injection directly into a vein, Oral for administration by mouth, Subcutaneous for injection into the tissue layer between the skin and muscle, Intramuscular for injection directly into a muscle, Topical for application directly to the skin or mucous membranes, Inhalation for administration through the respiratory tract, Intranasal for administration through the nasal passages, Intracerebral for injection directly into brain tissue, Intraventricular for injection into the brain's ventricles, Intrathecal for injection into the spinal canal, Ocular for administration directly to the eye, and Transdermal for absorption through the skin, typically via a patch. 
+
+If the drug was added to the culture media, annotate as 'In Media' without specifying the drug name. If multiple drugs were used, list the corresponding routes of administration in the order they appear, separated by ‘+’.
+
+If only 'injection' is mentioned without specifying the route, annotate as 'Injection (unspecified)'. Use 'Other [specify]' if the route does not fit into any of the predefined categories, and replace [specify] with the specific route used. If no unique route is applicable or if no drug was used, annotate as 'NA.' It is crucial to maintain the exact case format and avoid variations in upper and lower case, as well as special characters, to ensure consistency across all annotations.
 
 

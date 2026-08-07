@@ -1,8 +1,15 @@
-As a Biological Data Analyst, your primary task is to standardize the 'Pert_Duration' field by converting durations and ensuring consistent, clear formatting across all entries.
- 
-Carefully review the info in 'Pert_Duration'.
+Agent task: Perturbation-duration standardization
+
+Standardize the `Pert_Duration` field according to the rules below. Preserve the input order and return one standardized value for each original term.
             
--Before starting the standardization, check the total number of Original Terms provided. Ensure that the order of terms in your Standardized terms matches the exact order in the input data. Standardize each Original Term sequentially without omission, and verify that the total number of Standardized Terms matches the count in the input.
+## General Requirements
+
+- Preserve the original input order.
+- Maintain a strict one-to-one correspondence between original and standardized terms.
+- Do not skip, reorder, duplicate, split, or merge input rows.
+- Apply only the field-specific rules defined below.
+
+## Standardization Rules
 
 1. Preserve Composite Terms: Keep complex duration terms as they are to maintain detail, e.g., '14 hours + 5 days + 3 hours + 1 minute' remains unchanged. Convert'1 day + 4 day' to '1 Day + 4 Days'. Do not add as '5 Days'. Consider '48h,24h,6h' as one single term.
 
@@ -10,20 +17,17 @@ Carefully review the info in 'Pert_Duration'.
  e.g., 'from 4 weeks to 6 months' becomes '4 Weeks-6 Months'.
   '10 to 12 weeks'becomes '10-12 Weeks'.          
 
-3. Standardize Approximations: Standardize approximate times by removing spaces next to the tilde, e.g., '~ 18 Hours' becomes '~18 Hours'.
+3. Singular and Plural Terms for 0 terms: Standardize to singular where applicable, e.g., '0 Hours' becomes '0 Hour'. Also, ensure uniformity in terminology, changing 'LT' to 'Long-Term'.
 
-4. Singular and Plural Terms for 0 terms: Standardize to singular where applicable, e.g., '0 Hours' becomes '0 Hour'. Also, ensure uniformity in terminology, changing 'LT' to 'Long-Term'.
+4. Consistent Formatting: Capitalize the first letter of each term and maintain consistent terms across entries. For instance, 'overnight + 0 Hours' should be 'Overnight + 0 Hour'.
 
-5. Consistent Formatting: Capitalize the first letter of each term and maintain consistent terms across entries. For instance, 'overnight + 0 Hours' should be 'Overnight + 0 Hour'.
+5. Special Terms Standardization: Standardize terms like 'From birth' to 'From Birth' and 'From day 1 to day 28' to 'From Day 1 to Day 28'.
 
-6. Special Terms Standardization: Standardize terms like 'From birth' to 'From Birth' and 'From day 1 to day 28' to 'From Day 1 to Day 28'.
-
-7. Remove the ~ symbol, for example,  ~18 Hours convert to 18 Hours.
+6. Approximation Symbols
+Remove approximation symbols such as `~` while preserving the reported numeric value and unit.
+Example: ~18 Hours → 18 Hours
             
-8. Format the Output as a Table:
-Create a table with two columns:
-Column 1: List each Original Term exactly as it appears in the input. Preserve Original Term and do not apply any formatting or transformations to the original input term. Simply copy it directly into the first column of the output.
-Column 2: Provide the standardized term for each corresponding original term.
-Apply biological nomenclature standards and domain expertise to ensure accuracy in the duration standardization process.
-Do not include any explanations in any format.
+## Output Requirements
 
+Return exactly one standardized value for each original term.
+Do not include explanations or additional commentary.

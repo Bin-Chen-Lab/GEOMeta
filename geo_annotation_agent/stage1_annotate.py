@@ -292,8 +292,14 @@ def _stage1_print_intro(df_input: pd.DataFrame, cfg) -> None:
         flush=True,
     )
     print(
-        "[Stage1] Each chunk sends GSE/GSM metadata context to four role-specific "
-        "annotators and merges the responses into the 27-field GEOMeta schema.",
+        "[Stage1] Each chunk sends GSE/GSM metadata context to four task-specific "
+        "annotation agents: experimental context, biological context, perturbation, "
+        "and sample metadata.",
+        flush=True,
+    )
+    print(
+        "[Stage1] The agent outputs are merged into the canonical 27-field "
+        "GEOMeta sample-level schema.",
         flush=True,
     )
     print(
@@ -961,7 +967,7 @@ def run_stage1_raw_annotation(
       - GSM_Counts
 
     Output:
-      - row-level sample table with 28 fields
+      - row-level sample table with 27 fields
     """
     cfg.validate_env()
     cfg.ensure_dirs()
@@ -1010,7 +1016,7 @@ def run_stage1_raw_annotation(
     stage1_role_retry_sleep_seconds = _stage1_role_retry_sleep_seconds_from_env(default=5.0)
 
     print(
-        f"[Stage1] Role retry policy: "
+        f"[Stage1] Annotation-agent retry policy: "
         f"STAGE1_ROLE_MAX_ATTEMPTS={stage1_role_max_attempts}; "
         f"STAGE1_ROLE_RETRY_SLEEP_SECONDS={stage1_role_retry_sleep_seconds}.",
         flush=True,
@@ -1018,7 +1024,7 @@ def run_stage1_raw_annotation(
 
     if stage1_role_workers > 1:
         print(
-            f"[Stage1] Parallel role execution enabled: "
+            f"[Stage1] Parallel annotation-agent execution enabled: "
             f"STAGE1_ROLE_WORKERS={stage1_role_workers}; "
             f"STAGE1_ROLE_START_STAGGER_SECONDS={stage1_role_start_stagger_seconds}. "
             "Each metadata chunk still preserves GSM order and final schema merging.",

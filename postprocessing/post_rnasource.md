@@ -1,12 +1,19 @@
-As a Biological Experiment Standardization Specialist, your task is to standardize the formatting of scientific terms and acronyms commonly used in biological experiments.
-You have a list of RNA sources, including tissues, cells, and cell lines. Your task is to standardize them based on biological conventions. Each term refers to a specific concept in biology but may be written differently.
+Agent task: RNA-source standardization
 
-Instructions:
-Before starting the standardization, check the total number of Original Terms provided. Ensure that the order of terms in your Standardized terms matches the exact order in the input data. Standardize each Original Term sequentially without omission, and verify that the total number of Standardized Terms matches the count in the input.
+Standardize the `RNA_Source` field according to the rules below. Preserve the input order and return one standardized value for each original term.
+
+## General Requirements
+
+- Preserve the original input order.
+- Maintain a strict one-to-one correspondence between original and standardized terms.
+- Do not skip, reorder, duplicate, split, or merge input rows.
+- Apply only the field-specific rules defined below.
+
+## Standardization Rules
 
 1. Utilize your domain knowledge of biology to ensure accuracy and consistency in the standardized terms and acronyms. This involves recognizing common biological concepts, understanding standard nomenclature conventions, and interpreting context to determine the most appropriate standardization.
 
-2. Only work with the terms provided in the original input. Do not introduce any new terms or variations that are not already present in the input.
+2. Only work with the terms provided in the original input. Do not introduce biological, disease, anatomical, or cell-line context that is not explicitly present in the original term or supported by a supplied reference resource.
 
 3. If a term is correct and does not need changes, it should be listed exactly as it appears in both columns.
 
@@ -90,12 +97,14 @@ Rule: If a term represents a single entity, even if it includes descriptive comp
 Example:
 Original: Cells: B78chOVA Tumor Infiltrating Macrophage (CD11c+)
 Standardized: Cells: B78chOVA Tumor Infiltrating Macrophage (CD11c+)
-              
+   
+            
 23. T Cell Subtype Standardization Rule
 Rule: When referring to CD4 or CD8 T cells, always use the '+' sign to denote co-receptor expression and specify the full 'T Cell' phrase for clarity. For T helper subtypes, ensure that 'T Helper' is followed by the subtype number or name.
 Example: Cells: CD4+ → Cells: CD4+ T Cell
 Example: Cells: CD4 T Cells → Cells: CD4+ T Cell
-Example: Cells: CD4+ Th1 → Cells: CD4+ T Helper Cell          
+Example: Cells: CD4+ Th1 → Cells: CD4+ T Helper Cell
+            
             
 24. Rule:Remove the descriptor 'whole' when it is used to describe tissues. Standardize the term to its core anatomical name. For 'Whole Testis,' additionally, convert to the singular form 'Testis.' If the term lacks the 'Tissue' prefix, add it where appropriate.
 Examples:
@@ -111,10 +120,7 @@ Example:
 Whole Embryo → Embryo
 Tissue: Whole Embryo → Embryo
             
-Format the Output as a Table:
-Create a table with two columns:
-Column 1: List each original term separately.
-Column 2: Provide the standardized term corresponding to each original term.
-                       
-Ensure accuracy and consistency based on biological standards and domain expertise.
-Do not include any explanations in any format.
+## Output Requirements
+
+Return exactly one standardized value for each original term.
+Do not include explanations or additional commentary.

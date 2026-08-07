@@ -18,11 +18,11 @@ GEOMeta addresses these challenges through a multi-stage metadata harmonization 
 - Semantic normalization
 - Ontology-aware disease and tissue mapping
 - Controlled perturbation standardization
-- Reviewer-aware recovery and validation workflows
+- Audit, recovery, and review workflows
 
 The framework is designed for large-scale cross-study transcriptomic integration and downstream biomedical machine learning applications.
 
-The current curated release comprises 594,989 GSM samples derived from 22,782 unique GSE studies spanning diverse disease, tissue, demographic, and perturbation contexts.
+The current curated release comprises 594,989 curated GSM–GSE records, corresponding to 594,304 unique GSM accessions from 22,782 GEO Series and spanning diverse disease, tissue, demographic, and perturbation contexts.
 
 ---
 
@@ -173,6 +173,8 @@ If both tests pass, the environment is ready.
 
 ## 4. Direct OpenAI API with GPT-5
 
+GEOMeta uses GPT-5 as the recommended default model for metadata annotation, post-processing, and mapping.
+
 Set the following environment variables:
 
 ```bash
@@ -189,7 +191,6 @@ Do not save API keys directly in the codebase or commit them to GitHub.
 ## 5. Other OpenAI-compatible endpoints
 
 GEOMeta can also connect to other OpenAI-compatible endpoints by changing the base URL, API key, and model name.
-For the current GEOMeta release, we recommend google/gemini-3-flash-preview as the default OpenRouter model for metadata annotation, post-processing, and mapping.
 
 ### LiteLLM proxy
 
@@ -197,7 +198,7 @@ For the current GEOMeta release, we recommend google/gemini-3-flash-preview as t
 export LLM_API_TYPE=openai_compatible
 export LLM_BASE_URL=http://localhost:4000/v1
 export LLM_API_KEY="your_litellm_key"
-export LLM_MODEL=google/gemini-3-flash-preview
+export LLM_MODEL=gpt-5
 ```
 
 ### OpenRouter
@@ -244,8 +245,6 @@ Check that you are in the correct folder:
 ```bash
 ls
 ```
-The cd and ls commands are a sanity check to confirm that you are inside the correct GEOMeta project folder. These commands do not run the pipeline.
-
 You should see folders such as `scripts`, `geo_annotation_agent`, `Annotation_Prompts`, `postprocessing`, `inference`, `input`, and `mappings`.
 
 The repository includes an example GSE input file in the `input/` folder:
@@ -262,7 +261,8 @@ GSE130063
 GSE53779
 ```
 
-Users can replace this file with their own GSE list, while keeping the same column name.
+GEOMeta accepts GSE accession lists in CSV (.csv), Excel (.xlsx), tab-separated (.tsv), and plain-text (.txt) formats. Additional input examples and formatting instructions are provided in
+input/README.md.
 
 Run the full pipeline:
 
@@ -274,8 +274,6 @@ PYTHONPATH=. python scripts/run_pipeline.py \
 
 The `--workdir .` argument tells GEOMeta to use the current folder as the project working directory.
 
-The pipeline prints progress by stage. Stage 0 usually finishes quickly because it retrieves and prepares GEO metadata. Stage 1 may take longer because it performs model-based sample annotation. Runtime increases with the number of GSEs, the number of GSM samples, and the amount of metadata per study.
-
 The input file can also be Excel, TSV, or TXT if supported by the runner script. CSV is recommended because it is simple and avoids Excel parser issues during input loading.
 
 
@@ -283,10 +281,9 @@ The input file can also be Excel, TSV, or TXT if supported by the runner script.
 
 ## 7. Run individual stages
 
-The full pipeline command above is recommended for most users. Individual stage scripts are mainly useful when an earlier stage has already completed and you want to rerun only the downstream stages without repeating the full workflow.
+If a previous stage has already completed, downstream stages can be run directly.
 
 ### Stage 2 from saved Stage 1 output
-For example, if Stage 1 has already completed, Stage 2 can be run directly from the saved Stage 1 output:
 
 ```bash
 PYTHONPATH=. python scripts/run_stage2.py \
@@ -296,7 +293,6 @@ PYTHONPATH=. python scripts/run_stage2.py \
 ```
 
 ### Stage 3 from saved Stage 2 output
-If Stage 2 has already completed, Stage 3 can be run directly from the saved Stage 2 output:
 
 ```bash
 PYTHONPATH=. python scripts/run_stage3.py \
@@ -305,13 +301,10 @@ PYTHONPATH=. python scripts/run_stage3.py \
   --run-version <run_version>
 ```
 
-Replace <run_version> with the actual run version printed by the pipeline, for example:
-
-geometa_full_20260619_153452
-
-The exact output file names are also printed in the terminal during each pipeline run. When rerunning an individual stage, use the corresponding saved file from artifacts/outputs/.
+Replace `<run_version>` with the actual run version printed by the pipeline.
 
 ---
+
 
 ## 8. Troubleshooting
 
@@ -418,19 +411,22 @@ Then rerun the pipeline.
 
 ---
 
-## 9. Repository Structure
+## 9. Prompt templates and agent execution
 
-```text
-scripts/                Pipeline execution scripts
-geo_annotation_agent/   Core pipeline implementation
-Annotation_Prompts/     LLM extraction prompts
-postprocessing/         Stage 2 normalization prompts
-inference/              Derived metadata inference rules
-mappings/               Disease/tissue/compound references
-input/                  Input GSE accession lists
-figures/                Workflow figures and diagrams
-artifacts/              Outputs, caches, ledgers, and review files
-```
+In GEOMeta, an agent is a runtime LLM invocation configured with task-specific
+instructions, a defined metadata context, restricted target fields, and a
+structured output contract. The Markdown files in `Annotation_Prompts/`,
+`postprocessing/`, `inference/`, and the field-specific directories under
+`mappings/` contain reusable prompt templates for these agent tasks; the files
+themselves are not standalone autonomous agents.
+
+| Repository directory | Workflow component |
+|---|---|
+| `Annotation_Prompts/` | Stage 1 task-specific annotation-agent prompts |
+| `postprocessing/` | Stage 2 field-standardization prompts |
+| `inference/` | Stage 2 controlled-inference prompts |
+| `mappings/` | Stage 3 mapping prompts and reviewed mapping resources |
+| `geo_annotation_agent/` | Workflow orchestration, LLM execution, validation, and recovery |
 
 ---
 
@@ -457,7 +453,7 @@ geo_annotation_agent/stage0_retrieve.py
 
 ### Stage 1 — LLM Metadata Annotation
 
-Performs structured metadata extraction using role-specific prompts.
+Performs structured metadata extraction using four task-specific annotation.
 
 ### Representative Extracted Metadata Fields
 
@@ -478,11 +474,12 @@ Performs structured metadata extraction using role-specific prompts.
 
 ### Key Features
 
-- Role-based extraction
+- Task-specific extraction with restricted output fields
+- Shared GSE- and GSM-level metadata context
 - Structured JSON enforcement
 - Multi-GSM chunk annotation
 - Recovery logic for malformed outputs
-- Reviewer-aware logging system
+- Audit and review logging
 
 Implemented in:
 
@@ -492,26 +489,31 @@ geo_annotation_agent/stage1_annotate.py
 
 ---
 
-### Stage 2 — Post-processing & Standardization
+### Stage 2 — Field-Level Standardization and Controlled Inference
 
-Applies controlled normalization and semantic standardization to Stage 1 outputs.
+Applies 21 field-specific standardization agent tasks and three controlled-inference agent tasks to Stage 1 outputs.
 
-### Standardization Tasks
+### Field-Standardization Tasks
 
 - Disease normalization
 - Tissue normalization
-- Experimental setting cleanup
-- RNA source normalization
-- Sex inference
-- Age-group derivation
-- Perturbation classification
+- Experimental-setting normalization
+- RNA-source normalization
+- Age, dose, duration, and unit standardization
+- Perturbation-name and related-field standardization
+
+### Controlled-Inference Tasks
+
+- Age-group derivation from standardized age
+- Perturbation-type classification
+- Restricted sex inference from clearly sex-specific anatomical context
 
 ### Key Features
 
 - Field-specific post-processing prompts
 - Cached normalization mappings
 - Deterministic preprocessing
-- Controlled vocabulary harmonization
+- Field-specific terminology, format, and unit harmonization
 - Selective rerun/review system
 
 Implemented in:
@@ -522,7 +524,7 @@ geo_annotation_agent/stage2_postprocess.py
 
 ---
 
-### Stage 3 — Ontology-aware Mapping
+### Stage 3 — Controlled-Vocabulary and External-Resource Mapping
 
 Maps standardized metadata to curated biomedical ontologies and external resources.
 
@@ -547,6 +549,10 @@ Chemical perturbations are mapped to:
 - Canonical SMILES
 - PubChem URLs
 
+### RNA-Source Mapping
+
+RNA-source annotations are mapped using reviewed source mappings and, for cell-line terms, a DepMap cell-line model reference.
+
 ### Key Features
 
 - Prior curated mapping reuse
@@ -564,6 +570,8 @@ geo_annotation_agent/stage3_map.py
 ```
 
 ---
+
+Final release validation is performed by `geo_annotation_agent/stage4_validate_release.py`. This is a deterministic validation and release-checking step rather than an additional LLM-agent stage.
 
 # Example Final Metadata Fields
 
@@ -594,7 +602,7 @@ artifacts/outputs/
 |---|---|
 | `*_stage0_input.parquet` | GEO retrieval output |
 | `*_stage1_raw.xlsx` | Raw LLM annotations |
-| `*_stage2_post.xlsx` | Standardized annotations |
+| `*_stage2_post_final.xlsx` | Standardized and controlled-inference annotations |
 | `*_stage3_mapped.xlsx` | Full ontology-mapped dataset |
 | `*_stage3_mapped_filtered.xlsx` | Filtered mapped dataset |
 | `*_stage3_final_release.xlsx` | Simplified final release dataset |
@@ -644,7 +652,7 @@ All intermediate outputs, caches, mappings, and review artifacts are retained to
 
 - GEO metadata quality varies substantially across studies.
 - Some annotations may still require manual review.
-- LLM outputs are constrained through structured prompting and reviewer-aware recovery logic.
+- LLM outputs are constrained through structured prompts, schema validation, and recovery logic.
 - Large-scale runs may require substantial LLM API quota depending on dataset size and model selection.
 
 ---

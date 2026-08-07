@@ -14,21 +14,21 @@ Treat each GSM as a distinct entity while considering its context within the bro
 
 Pay special attention to specifics like experimental settings, diseases, treatments, and genotypes from the GSM entries.
 
-Utilize the context to display the full scientific names of drugs, chemicals, and other scientific terms, and avoid abbreviations to prevent ambiguity.
+Use full scientific names when they are explicitly available and helpful for avoiding ambiguity. Preserve standard gene symbols, cell-line names, identifiers, and widely accepted unambiguous abbreviations.
 
 Provide only concise annotations without any explanations beyond the instructions for each field. Double-check your results to ensure accuracy and completeness.
 
-For each field, capitalize the initial letter in the final annotations.
+Follow the exact capitalization, spelling, and value formats specified in each field-specific prompt. Do not alter identifiers, gene symbols, cell-line names, scientific nomenclature, or predefined controlled labels.
 
 Do not include phrases like “Here are the annotations for the provided GSM samples” in the outputs.
 
 Before starting the annotations, check the total number of GSM entries provided in the GSM_Info. Ensure that the order of GSM IDs in your annotations matches the exact order in the input data. Annotate each GSM sequentially without omission, and verify that the total number of annotated GSMs matches the count in the input.
 
-(2). Output Requirements (Role-Based Execution):
+(2). Output Requirements for Task-Specific Agent Execution:
 
 Your output must contain exactly one annotation row for each GSM sample in the input.
 
-For the current role, you should ONLY annotate the fields assigned to this role. Do NOT include fields outside of the assigned field list.
+For the current agent task, annotate only the fields assigned to that task. Do not include fields outside the assigned field list.
 
 Strict requirements:
 - The number of output rows MUST exactly match the number of GSM samples provided.
@@ -37,23 +37,35 @@ Strict requirements:
 - Do NOT omit any GSM samples.
 - Do NOT reorder GSM samples.
 
-For any field where information is not available or cannot be determined, use "NA".
+Unless a field-specific prompt defines another allowed label for missing, unavailable, or indeterminate information, use "NA".
+
+Field-specific labels such as "No Disease Mentioned", "Not Specified", or "Unknown" should be used only where explicitly permitted by the corresponding field instructions.
+
 Do not include any explanations, notes, or additional text. Output only the structured annotations.
 
-(3). Field Alignment and Consistency: Strictly enforce alignment across the fields assigned to this role. The order and count of annotated fields must always match the fields required for the current role.
+(3). Field Alignment and Consistency:
+
+Strictly enforce alignment across the fields assigned to the current agent task.
+The order and count of annotated fields must always match the fields required for that task.
 
 Do not shift, skip, duplicate, or omit any assigned fields, even if several adjacent fields are "NA".
 
-#Field-Level Consistency Requirements: Ensure consistency across the fields assigned to this role, and maintain logical consistency with the study-level (GSE) context and sample-level (GSM) information.
+# Field-Level Consistency Requirements
+
+Ensure consistency across the fields assigned to the current agent task and maintain logical consistency with the study-level GSE context and sample-level GSM information.
 
 Do not introduce contradictions within the annotated fields. Use the provided GSE and GSM metadata as the primary source of truth.
 
 When multiple GSM samples belong to the same GSE, ensure consistent interpretation of shared study-level attributes across all GSMs in the same input batch.
 
-Please annotate the following GSM samples using the information provided: GSE Information: {row['GSE_Info']}, and GSM Information: {row['GSM_Info']}.
+Use the GSE-level and GSM-level metadata supplied in the user message as the primary evidence for annotation.
 
 Instructions are as follows. Read the summary and experimental details provided above in the GSE record to understand the overall experiment design, various treatments, and conditions. Give special attention to GSE Title, GSE Summary, GSE Overall Design, GSM Source Name, and Title. Be specific and concise.
 
 For example, the GSE Overall Design may mention that samples are either treated with CCL4 treatment or vehicle control, but specific GSM information will include exactly what treatment was given to that particular sample. Sometimes even GSM Title and Source Name are informative for retrieving such information.
 
-# Role-Specific Execution Note: This annotation task is executed in multiple roles. Each role is responsible for a subset of fields. You will only see and annotate the fields assigned to your current role. Do not attempt to infer or include fields that are not part of this role.
+# Task-Specific Agent Execution Note
+
+Stage 1 annotation is executed through four task-specific agent calls. Each agent is responsible for a restricted subset of metadata fields and receives the same GSE-level and GSM-level context.
+
+For the current agent task, annotate only the assigned fields. Do not infer, include, or return fields assigned to another agent task.

@@ -1,27 +1,55 @@
-Act as an anatomy expert and categorize the provided list of anatomical terms based on sex specificity and embryo specificity.
+Agent task: Sex-from-tissue inference
 
-Carefully review the info in the 'Organ_Region' filed.
-            
-- If the term refers to a 'male-specific' part, label it as 'Male' in the output.
+Determine whether each standardized anatomical `Tissue` term provides sufficiently specific anatomical evidence to infer Sex. Preserve the input order and classify each term according to the rules below.
 
-- If the term refers to a 'female-specific' part, label it as 'Female.'
+## General Requirements
 
-- If the term is specific to the 'embryo' or represents developmental structures associated with embryos, label it as 'Embryo.'
+- Preserve the original input order.
+- Maintain a strict one-to-one correspondence between original and inferred
+  categories.
+- Infer Sex only from clearly sex-specific anatomical structures.
+- Do not infer Sex from disease, diagnosis, cell-line identity, developmental
+  stage, or general tissue type.
+- When anatomical evidence is not sufficiently sex-specific, return `Neutral`.
 
-- For all other sex-neutral anatomical parts, label them as 'Neutral.'
+## Inference Rules
 
-Please provide the output in a table format with two columns:
-Column 1: Original Term (exactly as given in the input list)
+### Male
 
-Column 2: Category (Male, Female, Embryo, or Neutral based on the guidelines above)
+Use `Male` only for clearly male-specific anatomical structures.
 
-Ensure that your categorization reflects accurate anatomical knowledge.
+Examples:
+- Testis → Male
+- Prostate → Male
+- Epididymis → Male
+- Seminal Vesicle → Male
+- Vas Deferens → Male
+- Penis → Male
 
-Example Output:
-   
-Original Term             Category
-Mammary Gland        Female
-Testis                         Male
-Whole Embryo           Embryo
-Heart                          Neutral
-Do not include any explanations in any format.
+### Female
+Use `Female` only for clearly female-specific anatomical structures.
+
+Examples:
+- Ovary → Female
+- Uterus → Female
+- Cervix → Female
+- Vagina → Female
+- Fallopian Tube → Female
+
+### Neutral
+
+`Neutral` indicates that no Sex inference should be made from the Tissue term. Use `Neutral` for anatomical structures that occur in both sexes or do not provide sufficient evidence for Sex inference.
+
+Examples:
+- Placenta → Neutral
+- Embryo → Neutral
+- Fetus → Neutral
+- Heart → Neutral
+- Liver → Neutral
+- Brain → Neutral
+
+## Output Requirements
+
+Return exactly one category for each original Tissue term.
+Use only `Male`, `Female`, or `Neutral`.
+Do not include explanations or additional commentary.

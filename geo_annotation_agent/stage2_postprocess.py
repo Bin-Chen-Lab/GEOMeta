@@ -636,99 +636,75 @@ def _apply_pert_type_logic(cfg, llm: BaseLLM, df: pd.DataFrame) -> pd.DataFrame:
     df["Pert_Type"] = df["Pert_Post"].map(lambda x: pert_to_type.get(_s(x), "NA"))
     return df
 
-
-
-
-def _derive_age_group_from_age_value(age_value: str) -> str:
-    """Derive Age_Group_Post from standardized Age_Post.
-
-    This deterministic fallback keeps Age_Group out of Stage 1 extraction and
-    derives it from the standardized biological age value in Stage 2. It is
-    intentionally conservative: cell lines, organoids, experimental timing,
-    unknown values, and non-age values return NA.
+def _apply_age_group_logic(
+    cfg,
+    llm: BaseLLM,
+    df: pd.DataFrame,
+) -> pd.DataFrame:
     """
-    x = _s(age_value)
-    if x in {"NA", "Unknown", ""}:
-        return "NA"
+    Derive Age_Group_Post from standardized Age_Post using the
+    controlled-inference prompt derive_agegroup_from_age.md.
 
-    xl = x.lower().strip()
+    Age_Group is derived only from Age_Post. The inference is performed on
+    unique standardized age terms and propagated back to all matching rows.
+    """
+    post_dir = Path(cfg.post_prompt_dir)
+    map_dir = Path(cfg.mapping_cache_dir)
+    debug_dir = Path(cfg.debug_dir)
 
-    non_age_terms = [
-        "cell line", "organoid", "in vitro", "culture", "passage",
-        "post-treatment", "post treatment", "hour", "hours", "day", "days",
-        "week post", "weeks post", "dpi", "hpi", "timepoint", "treated",
-    ]
-    if any(t in xl for t in non_age_terms):
-        return "NA"
+    map_dir.mkdir(parents=True, exist_ok=True)
+    debug_dir.mkdir(parents=True, exist_ok=True)
 
-    if any(t in xl for t in ["fetal", "foetal", "embryo", "embryonic", "gestational"]):
-        return "Infant"
-    if any(t in xl for t in ["newborn", "neonate", "neonatal", "infant"]):
-        return "Infant"
-    if "child" in xl or "pediatric" in xl or "paediatric" in xl:
-        return "Pediatric"
-    if "adolescent" in xl or "teen" in xl:
-        return "Adolescent"
-    if "elderly" in xl or "aged" in xl or "old adult" in xl:
-        return "Elderly"
-    if "adult" in xl:
-        return "Adult"
-
-    # Extract first numeric age. Prefer years when units are explicit or absent.
-    m = re.search(r"(\d+(?:\.\d+)?)", xl)
-    if not m:
-        return "NA"
-
-    try:
-        val = float(m.group(1))
-    except Exception:
-        return "NA"
-
-    # Convert units to years when clear.
-    if re.search(r"\b(month|months|mo)\b", xl):
-        years = val / 12.0
-    elif re.search(r"\b(day|days|d)\b", xl):
-        years = val / 365.25
-    elif re.search(r"\b(week|weeks|wk|wks)\b", xl):
-        # gestational/developmental weeks are treated as Infant; otherwise avoid overcalling.
-        if any(t in xl for t in ["gestational", "fetal", "foetal", "newborn", "infant"]):
-            return "Infant"
-        years = val / 52.1775
-    else:
-        years = val
-
-    if years < 0:
-        return "NA"
-    if years < 2:
-        return "Infant"
-    if years < 13:
-        return "Pediatric"
-    if years < 18:
-        return "Adolescent"
-    if years < 20:
-        return "Adults-18-19"
-    if years < 30:
-        return "Adults-20s"
-    if years < 40:
-        return "Adults-30s"
-    if years < 50:
-        return "Adults-40s"
-    if years < 60:
-        return "Adults-50s"
-    if years < 70:
-        return "Elderly-60s"
-    if years < 80:
-        return "Elderly-70s"
-    if years < 90:
-        return "Elderly-80s"
-    return "Elderly-90plus"
-
-
-def _apply_age_group_derivation(df: pd.DataFrame) -> pd.DataFrame:
     if "Age_Post" not in df.columns:
         df["Age_Group_Post"] = "NA"
-    else:
-        df["Age_Group_Post"] = df["Age_Post"].map(_derive_age_group_from_age_value)
+        return df
+
+    infer_prompt = _resolve_infer_prompt(
+        post_dir,
+        "AgeGroup_from_Age",
+    )
+
+    age_vals = df["Age_Post"].map(_s).tolist()
+    age_uniq = sorted(
+        {
+            v
+            for v in age_vals
+            if v not in {"NA", "Unknown", ""}
+        }
+    )
+
+    print(
+        f"[Stage2 INFER] AgeGroup_from_Age: "
+        f"uniq={len(age_uniq)} "
+        f"prompt={Path(infer_prompt).name}"
+    )
+
+    if not age_uniq:
+        df["Age_Group_Post"] = "NA"
+        return df
+
+    age_to_group = _build_mapping_infer(
+        llm=llm,
+        values=age_uniq,
+        task="AgeGroup_from_Age",
+        prompt_path=infer_prompt,
+        cache_json_path=map_dir / "AgePost_to_AgeGroup.json",
+        cache_parquet_path=map_dir / "AgePost_to_AgeGroup.parquet",
+        debug_dir=debug_dir,
+        batch_size=max(cfg.term_batch_size, 50),
+        cfg=cfg,
+    )
+
+    def derive_age_group(x: str) -> str:
+        x = _s(x)
+
+        if x in {"NA", "Unknown", ""}:
+            return "NA"
+
+        return age_to_group.get(x, "NA")
+
+    df["Age_Group_Post"] = df["Age_Post"].map(derive_age_group)
+
     return df
 
 def _normalize_disease_label_for_rule(x: Any) -> str:
@@ -827,6 +803,8 @@ def _normalize_queue_field_name(raw_field: str) -> Optional[str]:
         "Race": "Race",
         "Ethnicity": "Ethnicity",
         "Age": "Age",
+        "Age_Group": "Age_Group",
+        "AgeGroup": "Age_Group",
         "Sex": "Sex",
         "Timepoint": "Timepoint",
         "Outcome": "Outcome",
@@ -844,10 +822,11 @@ def run_stage2_postprocessing(cfg, df_stage1: pd.DataFrame) -> pd.DataFrame:
     Stage 2 pass 1:
       - creates paired Pre/Post columns
       - standardizes selected fields
-      - infers Sex from Tissue_Post only when Sex_Pre missing
+      - derives Age_Group_Post from standardized Age_Post
+      - infers Sex from Tissue_Post only when Sex_Pre is missing
       - infers Pert_Type from Pert_Post
       - keeps SampleType as a single column
-      - saves paired Excel/Parquet
+      - saves paired Excel/Parquet outputs
     """
     cfg.validate_env()
 
@@ -872,11 +851,32 @@ def run_stage2_postprocessing(cfg, df_stage1: pd.DataFrame) -> pd.DataFrame:
     for f in ["RNA_Library", "GSE_Pert", "GSM_Pert"]:
         df[f"{f}_Post"] = df[f"{f}_Pre"]
 
-    df = _apply_standard_postprocessing(cfg, llm, df, fields_to_process=None)
+    df = _apply_standard_postprocessing(
+        cfg,
+        llm,
+        df,
+        fields_to_process=None,
+    )
+
     df = _preserve_adjacent_normal_disease(df)
-    df = _apply_age_group_derivation(df)
-    df = _apply_sex_logic(cfg, llm, df)
-    df = _apply_pert_type_logic(cfg, llm, df)
+
+    df = _apply_age_group_logic(
+        cfg,
+        llm,
+        df,
+    )
+
+    df = _apply_sex_logic(
+        cfg,
+        llm,
+        df,
+    )
+
+    df = _apply_pert_type_logic(
+        cfg,
+        llm,
+        df,
+    )
 
     df_out = _build_stage2_output(df)
 
@@ -960,14 +960,30 @@ def run_stage2_postprocessing_v2(
     else:
         df_work["SampleType"] = df_work["SampleType"].map(_s)
 
-    # Use pass1 output as baseline for all post columns
-    pass1_by_gsm = df_stage2_pass1.set_index("GSM_ID", drop=False)
+    
+    # Use pass1 output as the baseline for all Stage 2 output columns.
+    # This preserves derived fields such as Pert_Type,
+    # Age_Group_Post, and Sex_Inferred_from_Tissue.
+    pass1_unique = (
+        df_stage2_pass1
+        .drop_duplicates(subset=["GSM_ID"])
+        .set_index("GSM_ID", drop=False)
+    )
+
     for c in df_stage2_pass1.columns:
         if c == "GSM_ID":
             continue
-        if c in df_work.columns:
-            # map values from pass1 where possible
-            df_work[c] = df_work["GSM_ID"].map(lambda x: pass1_by_gsm.loc[x, c] if x in pass1_by_gsm.index else df_work.get(c, "NA"))
+
+        lookup = pass1_unique[c].to_dict()
+        baseline = df_work["GSM_ID"].map(lookup)
+
+        if c not in df_work.columns:
+            df_work[c] = baseline
+        else:
+            df_work[c] = baseline.where(
+                baseline.notna(),
+                df_work[c],
+            )
 
     # Determine rows to rerun
     rerun_mask = df_work["GSM_ID"].astype(str).isin(affected_gsms)
@@ -1014,8 +1030,12 @@ def run_stage2_postprocessing_v2(
     df_work = enforce_stage2_disease_no_disease_states(df_work)
     df_work = _preserve_adjacent_normal_disease(df_work)
 
-    # Always refresh derived age groups from Age_Post before final output.
-    df_work = _apply_age_group_derivation(df_work)
+    # Always refresh Age_Group_Post from the current standardized Age_Post.
+    df_work = _apply_age_group_logic(
+        cfg,
+        llm,
+        df_work,
+    )
 
     # Recompute Sex if flagged
     if "Sex" in normalized_fields:

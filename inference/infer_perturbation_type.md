@@ -1,80 +1,74 @@
-As a Biological Data Analyst, your primary task is to standardize the Perturbation_Type field with uniformity, clarity, and scientific accuracy. This includes classifying perturbations into predefined categories, ensuring consistency across entries, and avoiding unnecessary detail.
+Agent task: Perturbation-type inference
 
-1. Inferring Perturbation_Type from Perturbation_Name
-Use the detailed perturbation name in Pert_Post to determine the Perturbation_Type from the categories below:
-•	CTL (Control/Untreated): Includes untreated samples, vehicle controls, and common solvents control like DMSO, saline, PBS etc.
-•	CP (Chemical Perturbation): Encompasses drugs, inhibitors, toxins, and any synthetic chemical compounds.
-•	BIO (Biological Perturbation): Covers biological agents like cytokines, growth factors, antibodies, peptides, live cells, and biological extracts.
-•	KO (Knockout): Genetic perturbations where a gene is completely inactivated or deleted.
-•	KD (Knockdown): Reduction of gene expression using methods like siRNA, shRNA, or antisense oligonucleotides.
-•	OE (Overexpression): Perturbations involving increased expression of a gene or protein.
-•	ES (Environmental Perturbation): Changes in environmental conditions like diet, hypoxia, or physical injury.
-•	VIR (Viral Infection): Perturbations involving infection with viruses or viral particles.
-•	OTHER: Perturbations that do not fit into the above categories or lack sufficient information.
-•	NA: Use NA when:
-(1)	 Baseline/no intervention datasets.
-(2)	Condition is not due to deliberate perturbation (e.g., natural disease state, age group, sex, tissue only).
-(3)	Perturbation info is entirely absent and cannot be inferred.
+Infer the `Perturbation_Type` from each standardized `Pert` term according to the rules below. Preserve the input order and return one inferred Perturbation_Type value for each original term.
 
-2. Direct Association 
-Associate common agents with their category based on usage in biological studies:
-CP: doxycycline, tamoxifen, cycloheximide.
-BIO: interferon-γ, recombinant EGF, monoclonal antibody.
-VIR: Influenza virus, HIV, adenovirus.
-ES: hypoxia, high-fat diet, UV irradiation.
-                
-3. Handling Complex Combinations: 
-When multiple agents are combined (+), break down and classify each:
-doxycycline + tamoxifen → CP + CP
-Aflibercept + anti-PD1 → BIO + BIO
-Maintain the same order as in the original term.              
+## General Requirements
 
-4. Clarifying 'OTHER' vs 'NA'
-OTHER: A deliberate perturbation exists but doesn’t fit any standard category (e.g., electrical stimulation).
-NA: No deliberate perturbation present.
-If the sample was intentionally manipulated → use a defined category or OTHER.
-If not → use NA.
+- Preserve the original input order.
+- Maintain a strict one-to-one correspondence between original and inferred terms.
+- Infer Perturbation_Type only from the standardized Pert term.
+- Do not infer a perturbation from disease, age, sex, tissue, or other
+  naturally occurring metadata attributes.
+- Preserve the order and separators of multi-component perturbations.
 
- 5. Chemical Inducers and Modifiers
-Classify as CP unless they directly represent a different category:
-DSS-induced colitis → CP
-Lentiviral MyoD overexpression → OE.
+## Inference Rules
 
- 6. Generalization
-Output should only be the general category code (CTL, CP, BIO, KO, KD, OE, ES, VIR, OTHER, NA) without concentrations or extra details.
-Genetic: Lentiviral MyoD Overexpression → OE
-Small Molecule: Retinoic Acid → CP.
+1. Perturbation_Type Categories
 
-7. Symbols and Multi-component Formatting
-Summary Rules:
-+ (plus): Combined agents in one perturbation; classify each separately, keep original order, join with +.
-; (semicolon): Distinct genetic modifications or separate perturbations in one sample; classify each separately, keep original order, join with ; .
-Quick Examples:
-KO; KO; BIO → two knockouts and one biological agent.
-CP + OTHER → chemical plus unclassified intervention.
-Detailed Examples:
-Combined Agents with +:
+Use the standardized `Pert` term to assign one of the following categories:
+
+- CTL (Control): An explicit experimental control condition, including Untreated, Vehicle, Placebo, DMSO, PBS, Saline, or Baseline/pre-treatment when explicitly used as a control condition.
+
+- CP (Chemical Perturbation): Encompasses drugs, inhibitors, toxins, and any synthetic chemical compounds.
+
+- BIO (Biological Perturbation): Covers biological agents like cytokines, growth factors, antibodies, peptides, live cells, and biological extracts.
+
+- KO (Knockout): Genetic perturbations where a gene is completely inactivated or deleted.
+
+- KD (Knockdown): Reduction of gene expression using methods like siRNA, shRNA, or antisense oligonucleotides.
+
+- OE (Overexpression): Perturbations involving increased expression of a gene or protein.
+
+- ES (Environmental Perturbation): Changes in environmental conditions like diet, hypoxia, or physical injury.
+
+- VIR (Viral Infection): Use only when a virus or viral particle is applied as an infectious or
+challenge agent.
+
+- OTHER: A deliberate perturbation is clearly present but does not fit any of the defined perturbation categories.
+
+- NA: No deliberate perturbation is represented and the term does not describe an explicit experimental control condition. This includes missing perturbation information or naturally occurring observational attributes such as disease state, age, sex, or tissue.
+
+2. Common Classification Examples:
+- Doxycycline → CP
+- Tamoxifen → CP
+- Cycloheximide → CP
+- Interferon-γ → BIO
+- Recombinant EGF → BIO
+- Monoclonal antibody → BIO
+- Hypoxia → ES
+- High-fat diet → ES
+- UV irradiation → ES
+- Influenza virus infection → VIR
+- HIV infection → VIR
+- DSS-Induced Colitis → CP
+- Retinoic Acid → CP
+- Lentiviral MYOD Overexpression → OE
+
+3. Multi-component Perturbations
+When a Pert term contains multiple components, classify each component separately while preserving the original component order.
+- Use + (plus): Combined agents in one perturbation; classify each separately, keep original order, join with +.
+- Use ; (semicolon): Distinct genetic modifications or separate perturbations in one sample; classify each separately, keep original order, join with ; .
+
+## Examples:
 Doxycycline + Tamoxifen → CP + CP
 Bicuculline Methiodide + DL-Norepinephrin Hydrochloride + Carbamolylcholine Chloride → CP + CP + CP
 Aflibercept + AMG386 + Anti-PD1 → BIO + BIO + BIO
-Multiple Genetic Modifications with ;:
-Conditional Knockout: Yap; Conditional Knockout: Taz; Cre: VE-cadherin-CreERT2 → KO; KO; BIO
-Conditional Knockout: Mst1; Conditional Knockout: Mst2; Cre: alb-CreF → KO; KO; BIO
-Conditional Knockout: NIKdeltaT3flSTOP; Conditional Knockout: Notch2ICN; Cre: CD19Cre → KO; KO; BIO
-8. Format the Output as a Table
+Conditional Knockout: Yap; Conditional Knockout: Taz; Cre: VE-cadherin-CreERT2 → KO; KO; OTHER
+Conditional Knockout: Mst1; Conditional Knockout: Mst2; Cre: alb-CreF → KO; KO; OTHER
+Conditional Knockout: NIKdeltaT3flSTOP; Conditional Knockout: Notch2ICN; Cre: CD19Cre → KO; KO; OTHER
 
-Format the Output as a Table
-Column 1 — Original Term: Copy exactly as in input (no changes to spelling, case, spacing, or symbols).
-Column 2 — Standardized Term: Use only the appropriate category code(s) from the rules above.
-Do not include extra details (concentration, timepoint, agent names).
-Maintain correct separator usage (+ or ;) and the original order.
-Example Table Format:
+## Output Requirements
 
-Original Term	Standardized Term
-DMSO 	→        CTL
-DMSO + Doxycycline →       CTL + CP
-Untreated	→       CTL
-Vehicle + Doxycycline →       CTL + CP
-Doxycycline + Tamoxifen	→ CP + CP
-Conditional Knockout: Yap; Conditional Knockout: Taz; Cre: VE-cadherin-CreERT2→ KO; KO; BIO
-Saline	→ CTL
+Return exactly one inferred Perturbation_Type value for each original Pert term.
+Use only the following category codes: `CTL`, `CP`, `BIO`, `KO`, `KD`, `OE`, `ES`, `VIR`, `OTHER`, or `NA`.
+For multi-component perturbations, preserve the original component order and separator structure using ` + ` or `; ` as defined above. Do not include explanations or additional commentary.

@@ -89,7 +89,20 @@ def blank_release_na(df_out: pd.DataFrame) -> pd.DataFrame:
     NA instead of being blanked.
     """
     df_out = df_out.copy()
-    return df_out.replace({"Unknown": "NA"})
+
+    # Normalize Unknown only in string-like columns. Avoid DataFrame.replace()
+    # here because pandas is deprecating silent dtype downcasting.
+    for col in df_out.select_dtypes(include=["object", "string"]).columns:
+        unknown_mask = (
+            df_out[col]
+            .astype("string")
+            .eq("Unknown")
+            .fillna(False)
+        )
+        if unknown_mask.any():
+            df_out.loc[unknown_mask, col] = "NA"
+
+    return df_out
 
 
 def _is_release_blank(x: Any) -> bool:
@@ -846,7 +859,7 @@ def disease_lookup_keys_for_prior_mapping(x: Any) -> set[str]:
     Disease-specific wrapper for reviewed disease_mappings.xlsx reuse.
 
     Keep this generic. Do not hard-code individual disease examples here.
-    Deeper semantic equivalence is handled by GPT5 prior-mapping semantic reuse.
+    Deeper semantic equivalence is handled by LLM prior-mapping semantic reuse.
     """
     return lookup_key_variants(x)
 
@@ -1109,7 +1122,7 @@ def resolve_terms_by_prior_mapping_llm(
     batch_size: int = 20,
 ) -> tuple[dict[str, dict], pd.DataFrame]:
     """
-    Ask GPT5 whether unmatched terms should reuse an existing reviewed mapping-file row.
+    Ask LLM whether unmatched terms should reuse an existing reviewed mapping-file row.
 
     Returns:
       resolved_records: term -> Stage3 mapping record
@@ -1411,6 +1424,7 @@ def fill_release_action_for_pass_rows(df_out: pd.DataFrame) -> pd.DataFrame:
 
     review_false = (
         df_out["Review_Required"]
+        .astype("string")
         .fillna(False)
         .astype(str)
         .str.strip()
@@ -2945,7 +2959,7 @@ def _build_rna_source_term_payload(
 ) -> list[dict]:
     """
     Build one payload record per unresolved RNA_Source term.
-    This keeps the GPT5 mapping task term-level rather than row-level.
+    This keeps the LLM mapping task term-level rather than row-level.
     """
     source = df[source_col].fillna("").astype(str).str.strip()
 
@@ -3072,11 +3086,11 @@ def map_unresolved_rna_source_terms_with_prompt(
                     "Standardized_Term": standardized,
                     "RNA_Source_Mapped": mapped if valid else "Other",
                     "RNA_Source_Mapping_Status": (
-                        "Mapped: GPT5 prompt-rule RNA source mapping"
+                        "Mapped: LLM prompt-rule RNA source mapping"
                         if valid
-                        else "Mapped: GPT5 prompt-rule fallback to Other after invalid output"
+                        else "Mapped: LLM prompt-rule fallback to Other after invalid output"
                     ),
-                    "RNA_Source_Mapping_Method": "GPT5 RNA source mapping prompt",
+                    "RNA_Source_Mapping_Method": "LLM RNA source mapping prompt",
                     "RNA_Source_Mapping_Confidence": confidence,
                     "RNA_Source_Mapping_Reason": reasoning if reasoning else "Mapped using RNA source mapping prompt.",
                     "RNA_Source_Review_Required": confidence == "low",
@@ -3128,11 +3142,11 @@ def map_unresolved_rna_source_terms_with_prompt(
 def reconcile_rna_source_status_after_automap(df_out: pd.DataFrame) -> pd.DataFrame:
     """
     Clean RNA_Source mapping status after reviewed mapping, cell-line reference
-    mapping, and GPT5 prompt-rule automapping.
+    mapping, and LLM prompt-rule automapping.
 
     Distinguish:
     1. RNA_Source_Post missing: mapping skipped, not review-required.
-    2. RNA_Source_Post present but GPT5/rules accepted null: intentional blank.
+    2. RNA_Source_Post present but LLM/rules accepted null: intentional blank.
     3. stale unmapped status but mapped value exists: accepted automated mapping.
     """
     df_out = df_out.copy()
@@ -3174,8 +3188,8 @@ def reconcile_rna_source_status_after_automap(df_out: pd.DataFrame) -> pd.DataFr
 
     review_false = (
         df_out["RNA_Source_Review_Required"]
-        .fillna(False)
-        .astype(str)
+        .astype("string")
+        .fillna("")
         .str.strip()
         .str.upper()
         .isin({"FALSE", "0", "NO", ""})
@@ -3205,10 +3219,10 @@ def reconcile_rna_source_status_after_automap(df_out: pd.DataFrame) -> pd.DataFr
     accepted_null_mask = status_unmapped & review_false & (~source_blank) & mapped_blank
 
     df_out.loc[accepted_null_mask, "RNA_Source_Mapping_Status"] = (
-        "Mapped: GPT5 prompt-rule accepted null"
+        "Mapped: LLM prompt-rule accepted null"
     )
     df_out.loc[accepted_null_mask, "RNA_Source_Mapping_Method"] = (
-        "GPT5 RNA source mapping prompt"
+        "LLM RNA source mapping prompt"
     )
 
     confidence_blank = (
@@ -3234,7 +3248,7 @@ def reconcile_rna_source_status_after_automap(df_out: pd.DataFrame) -> pd.DataFr
         "Mapped: accepted automated RNA source mapping"
     )
     df_out.loc[mapped_present_mask, "RNA_Source_Mapping_Method"] = (
-        "GPT5 RNA source mapping prompt"
+        "LLM RNA source mapping prompt"
     )
     df_out.loc[mapped_present_mask, "RNA_Source_Review_Required"] = False
 
@@ -3251,14 +3265,14 @@ def reconcile_rna_source_status_after_automap(df_out: pd.DataFrame) -> pd.DataFr
     return df_out
 
 def rebuild_rna_source_review_queue_after_automap(df: pd.DataFrame) -> pd.DataFrame:
-    """Rebuild RNA source review queue after GPT5 prompt-rule mapping."""
+    """Rebuild RNA source review queue after LLM prompt-rule mapping."""
     if "RNA_Source_Review_Required" not in df.columns:
         return pd.DataFrame()
 
     review_mask = (
         df["RNA_Source_Review_Required"]
-        .fillna(False)
-        .astype(str)
+        .astype("string")
+        .fillna("")
         .str.strip()
         .str.upper()
         .isin({"TRUE", "1", "YES"})
@@ -3354,7 +3368,7 @@ def run_stage3_mapping(cfg, df_stage2: pd.DataFrame) -> pd.DataFrame:
         # variant of a reviewed disease_mappings.xlsx row.
         disease_prior_semantic_terms.append(t)
 
-    # Step 2: GPT5 semantic reuse against reviewed disease_mappings.xlsx rows.
+    # Step 2: LLM semantic reuse against reviewed disease_mappings.xlsx rows.
     disease_candidate_records = _make_prior_candidate_records(
         Path(cfg.prior_disease_mapping_xlsx),
         domain="Disease",
@@ -3387,7 +3401,7 @@ def run_stage3_mapping(cfg, df_stage2: pd.DataFrame) -> pd.DataFrame:
         if t in disease_cache:
             continue
 
-        # Step 4: true new disease term; send to CTD candidate retrieval + GPT5.
+        # Step 4: true new disease term; send to CTD candidate retrieval + LLM.
         need_terms.append(t)
 
     _save_json(disease_cache_fp, disease_cache)
@@ -3916,7 +3930,7 @@ def run_stage3_mapping(cfg, df_stage2: pd.DataFrame) -> pd.DataFrame:
         source_col="RNA_Source_Post",
     )
 
-    # Cell-line reference lookup before GPT5 RNA_Source automapping.
+    # Cell-line reference lookup before LLM RNA_Source automapping.
     cell_line_ref_path = Path(
         getattr(
             cfg,
@@ -3952,13 +3966,13 @@ def run_stage3_mapping(cfg, df_stage2: pd.DataFrame) -> pd.DataFrame:
     # Rebuild review queue after prompt-rule mapping.
     rna_source_review_df = rebuild_rna_source_review_queue_after_automap(df)
 
-    rna_source_auto_fp = reviewdir / f"{cfg.run_version}_stage3_rna_source_gpt5_auto_mapping_decisions.xlsx"
+    rna_source_auto_fp = reviewdir / f"{cfg.run_version}_stage3_rna_source_auto_mapping_decisions.xlsx"
     rna_source_review_fp = reviewdir / f"{cfg.run_version}_stage3_rna_source_review_queue.xlsx"
 
     rna_source_auto_df.to_excel(rna_source_auto_fp, index=False)
     rna_source_review_df.to_excel(rna_source_review_fp, index=False)
 
-    print("[SAVED] Stage3 RNA source GPT5 auto mapping decisions:", rna_source_auto_fp)
+    print("[SAVED] Stage3 RNA source LLM auto mapping decisions:", rna_source_auto_fp)
     print("[SAVED] Stage3 RNA source review queue:", rna_source_review_fp)
 
     # -------------------------

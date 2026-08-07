@@ -8,6 +8,10 @@ This folder contains curated disease normalization and ontology mapping resource
 
 Prompt guidance used for LLM-assisted disease normalization and CTD/MEDIC ontology mapping.
 
+### `ctd_medic_disease_reference.csv`
+
+CTD/MEDIC reference table used for disease candidate retrieval, ontology matching, identifier assignment, and validation of mapped disease concepts.
+
 ### `disease_mappings.xlsx`
 
 Curated disease mapping table used by the Stage 3 workflow.

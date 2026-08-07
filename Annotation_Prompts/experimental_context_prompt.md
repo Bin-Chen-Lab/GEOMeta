@@ -1,14 +1,20 @@
-Role: Experimental Context
-Annotate only the following fields for each GSM sample in this role:
-GSM_ID, GSE_ID, Seq_Type, Organism, Strain, Genotype, RNA_Library, RNA_Source, Tissue, Experimental_Setting, Model_Type. Do not annotate any other fields in this role.
+Agent task: Experimental-context annotation
+
+Annotate only the following fields for each GSM sample in this agent task:
+GSM_ID, GSE_ID, Seq_Type, Organism, Strain, Genotype, RNA_Library, RNA_Source, Tissue, Experimental_Setting, Model_Type.
+
+Do not annotate fields outside this assigned field set.
 
 1. GSM_ID: The unique identifier for the sample within the GEO database.
 
 2. GSE_ID: The GEO Series ID associated with the sample.
 
-3. Seq_Type: Determine the sequencing type for each sample and annotate it using one of the following categories. All RNA-seq samples must fall into exactly one of these three labels - no spelling variations, hyphens, or extra terms are permitted.
-- (1) SC-RNA: Mentions of 'single-cell', 'scRNA-Seq', 'single-nucleus', 'RNA-Seq', etc. Use technologies or methods like '10x Genomics', 'Fluidigm C1', 'SMART-Seq', 'Droplet-based', 'Microfluidics', 'CEL-Seq'. Phrases indicating individual cell analysis, such as 'cell count: 1', 'cells sorted into individual wells/droplets', 'isolation of single cells/nuclei'. Focus on cellular heterogeneity, individual cell types, or single-cell resolution. Never deviate from SC-RNA (no variants like SC RNA, Single-cell RNA, or scRNA-Seq)
+3. Seq_Type: Determine the sequencing type for each sample and annotate it using one of the following categories. Every sample must be assigned exactly one of these three labels - no spelling variations, hyphens, or extra terms are permitted.
+
+- (1) SC-RNA: Mentions of 'single-cell', 'scRNA-Seq', 'single-nucleus', etc. Use technologies or methods like '10x Genomics', 'Fluidigm C1', 'SMART-Seq', 'Droplet-based', 'Microfluidics', 'CEL-Seq'. Phrases indicating individual cell analysis, such as 'cell count: 1', 'cells sorted into individual wells/droplets', 'isolation of single cells/nuclei'. Focus on cellular heterogeneity, individual cell types, or single-cell resolution. Never deviate from SC-RNA (no variants like SC RNA, Single-cell RNA, or scRNA-Seq)
+
 - (2) BULK-RNA: General terms like 'Bulk-RNA' without mention of single-cell techniques. Mentions of 'Population': If the sample refers to a 'population' of cells (e.g., 'HSC population', 'CLP population'), classify it as BULK-RNA. References to tissues, organs, cell lines, biopsies, or cell populations (e.g., 'RNA extracted from tissue', 'pooled cells'). Always use the capitalized BULK-RNA (avoid variations like BULRNA, BULAIN-RNA, BULNA, etc.). 
+
 - (3) Other: Any samples not belong to either SC-RNA or BULK-RNA. For techniques, such as 'ChIP-Seq', 'ATAC-Seq', 'DNA-Seq', 'WGS', 'Exome-Seq', 'Methyl-Seq', 'Hi-C', 'CLIP-Seq', 'Ribo-Seq', 'Bisulfite Sequencing', which are unrelated to RNA expression profiling, use 'Other' instead. Always label these as Other. Do not create sub-variants like RIBO-RNA, DNA-Seq, or RNA-other.
 Some Examples:
 If the metadata says 'This is a single-cell RNA-seq experiment using 10x Genomics,' → SC-RNA.

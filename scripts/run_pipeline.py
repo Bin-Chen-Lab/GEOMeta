@@ -1567,18 +1567,6 @@ def main() -> None:
     print_stage_time("Stage 0", stage_times["stage0_seconds"])
 
     print("\n========== Stage 1 ==========")
-    print("[Stage1] Starting LLM-guided GEO metadata annotation.")
-    print(
-        "[Stage1] Behind the scenes: each metadata chunk is sent to four role-specific "
-        "annotators: experimental context, biological context, perturbation, and sample metadata."
-    )
-    print(
-        "[Stage1] The role outputs are merged into the canonical 27-field GEOMeta sample-level schema."
-    )
-    print(
-        "[Stage1] Progress is reported by completed metadata chunks, elapsed time, average time/chunk, and ETA."
-    )
-    print("[Stage1] Main outputs will be saved to artifacts/outputs/ and artifacts/ledgers/.")
     t0 = time.perf_counter()
     reviewer = ReviewerV2()
     df_stage1 = run_stage1_raw_annotation_v2(

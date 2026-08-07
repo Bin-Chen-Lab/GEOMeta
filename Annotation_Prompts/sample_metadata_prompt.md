@@ -1,7 +1,6 @@
-Role: Sample Metadata
+Agent task: Sample-metadata annotation
 
-Annotate only the following fields for each GSM sample in this role:
-SampleType, Specimen_Type, Race, Ethnicity, Age, Sex, Timepoint, Outcome. Do not annotate any other fields in this role.
+Annotate only the following fields for each GSM sample in this agent task: SampleType, Specimen_Type, Race, Ethnicity, Age, Sex, Timepoint, Outcome. Do not annotate fields outside this assigned field set.
 
 First, annotate the 'SampleType' and 'Specimen_Type'. 'SampleType' is the broad, top-level classification of the sample (e.g., Patient Specimen, Cell Line, Organoid, etc.), while 'Specimen_Type' is a narrower annotation describing how the tissue or cells were obtained or cultured (e.g., Primary Tissue, PDX, Isolated Cells). If SampleType and Specimen_Type appear similar, annotate each field according to its own definition and scope. 
 Use 'SampleType' to categorize the overall nature of the sample.
@@ -161,7 +160,7 @@ Use the 'Specimen_Type' field to categorize the biological source or model syste
 Lastly, here are the final notes for annotations: 
 (1) 'Always Prioritize Specificity: Always annotate using the most specific category.' 
 (2) 'Apply Resolution Rules: Use the provided overlap rules to resolve ambiguous cases.' 
-(3) 'Document Unusual Cases: If you use Other or NA, note why it was chosen if possible.' 
+(3) Use 'NA' only when the applicable specimen information is unavailable or cannot be determined from the provided metadata.
 (4) 'Consistency: Ensure consistent usage across all samples to avoid misclassification.'
 
  Next, annotate Race and Ethnicity. First of all, here is the Race vs. Ethnicity Distinction.
@@ -256,36 +255,49 @@ Age records the exact age of the sample source with numeric values and standardi
 Do not use treatment duration, culture duration, differentiation duration, or timepoint information as biological age.
 
 25. Sex
-                 'Sex' must be accurately extracted, annotated, and standardized based on the GSE summary, overall design, and GSM-specific metadata.
-                 The annotations should reflect the study's experimental design and the terminology used in the metadata.
+'Sex' must be accurately extracted, annotated, and standardized based on the GSE summary, overall design, and GSM-specific metadata.
+The annotations should reflect the study's experimental design and the terminology used in the metadata.
                 
-                 (1). Where to Extract Sex Information:
-                 'GSE Overall Design and Summary': Look for explicit mentions of Sex in the study-level description. Examples include '72 males and 72 females' or 'Male mice treated with PBS', or references to Sex-specific biological processes like 'Effects of testosterone in males'.
-                 'GSM-Specific Metadata': Search for explicit sex mentions in sample-level fields. For instance, 'Sex: Male' or ' Sex: Female'. Sex may also appear indirectly, such as 'pregnant' or 'ovarian cancer patient' (implying 'Female') or 'patient with prostate enlargement' (implying 'Male').
-                 'Implicit Sex Clues': If not explicitly stated, infer sex from biological or experimental context. For example, 'ovarian tissue' implies 'Female', 'prostate tissue' implies 'Male', and 'pregnant' implies 'Female'. If no inference is possible, use 'Unknown'.
+(1). Where to Extract Sex Information:
+'GSE Overall Design and Summary': Look for explicit mentions of Sex in the study-level description. Examples include '72 males and 72 females' or 'Male mice treated with PBS', or references to Sex-specific biological processes like 'Effects of testosterone in males'.
+'GSM-Specific Metadata': Search for explicit sex mentions in sample-level fields. For instance, 'Sex: Male' or ' Sex: Female'. Sex may also appear indirectly, such as 'pregnant' or 'ovarian cancer patient' (implying 'Female') or 'patient with prostate enlargement' (implying 'Male').
+'Indirect Context': Do not infer Sex from general tissue, disease, cell-line identity, or other indirect biological context. A restricted inference may be made only from clearly sex-specific anatomical or physiological context, including ovarian, cervical, uterine, prostate, or pregnancy-related information. Otherwise, annotate as 'NA'.
                 
-                 (2). Strategy for Extracting and Annotating Sex:
-                 Step 1: Parse the GSE Summary and Overall Design. If the GSE states something like '72 male', annotate sex as 'Male'. If it states 'samples collected from females', annotate as 'Female'. Standardize all explicitly mentioned sex.
-                 Step 2: Parse GSM Metadata. Look for explicit fields like 'Sex: M' or 'Sex: F' and map them to 'Male' or 'Female'. If only abbreviations or indirect clues are given, interpret them accordingly.
-                 Step 3: Infer Sex When Necessary. Use tissue type or experimental context if direct mentions are absent. If no inference is possible, use 'Unknown'.
-                 Step 4: Standardize Sex Information. The final annotation should be 'Sex: Male', 'Sex: Female', 'Sex: Unknown', or if not applicable (e.g., for cell lines without donor info), 'Sex: NA'. If 'Sex: Not Specified', use 'Sex: NA'.
-                
-                 (3). How to Handle Sex for Cell Lines:
-                 In general, cell lines are not sex-specific, so annotate 'Sex: NA'.
-                 If donor information is provided, use it to assign 'Male' or 'Female'. If the cell line originates from ovarian carcinoma, 'Female'; from prostate carcinoma, 'Male'. If multiple donors of different sex were used to create a hybrid cell line, annotate 'Sex: Mixed'.
+(2). Strategy for Extracting and Annotating Sex:
+Step 1: Parse the GSE Summary and Overall Design. If the GSE states something like '72 male', annotate sex as 'Male'. If it states 'samples collected from females', annotate as 'Female'. Standardize all explicitly mentioned sex.
 
-                 (4). Examples:
-                 Example 1: A cell line 'A549' (lung carcinoma, no sex info): 'Sex: NA'.
-                 Example 2: A cell line 'HeLa' derived from a female cervical carcinoma: 'Sex: Female'.
-                 Example 3: A cell line 'LNCaP' (prostate carcinoma): 'Sex: Male'.
-                 Example 4: A hybrid cell line from male and female donors: 'Sex: Mixed'.
+Step 2: Parse GSM Metadata. Look for explicit fields like 'Sex: M' or 'Sex: F' and map them to 'Male' or 'Female'. If only abbreviations or indirect clues are given, interpret them accordingly.
+
+Step 3: Handle Missing or Conflicting Information.
+
+If Sex is not explicitly reported, annotate as 'NA'. Use 'Unknown' only when the metadata explicitly reports Sex as unknown or contains conflicting sample-specific Sex information.
+
+Step 4: Standardize Sex Information. The final Sex value must be one of the following: 'Male', 'Female', 'Mixed', 'Unknown', or 'NA'.
+
+Use 'NA' when sex is not applicable or when donor sex is unavailable for a cell line. Use 'Unknown' only when sex is applicable but the available information is ambiguous or conflicting.
+                
+(3). How to Handle Sex for Cell Lines:
+
+When donor Sex is explicitly provided, annotate as 'Male' or 'Female', as applicable.
+
+When donor Sex is not explicitly provided, a restricted inference may be made only for a well-established cell line with a clearly sex-specific anatomical origin. For example, a cell line derived from ovarian, cervical, or uterine tissue may be annotated as 'Female', whereas a cell line derived from prostate tissue may be annotated as 'Male'.
+
+For cell lines without explicit donor Sex or a clearly sex-specific anatomical origin, annotate as 'NA'.
+
+If multiple donors of different sexes were used to create a hybrid cell line, annotate as 'Mixed'.
+
+(4). Examples:
+Example 1: A cell line 'A549' (lung carcinoma, no sex info) → 'NA'.
+Example 2: A cell line 'HeLa' derived from a female cervical carcinoma → 'Female'.
+Example 3: A cell line 'LNCaP' (prostate carcinoma) → 'Male'.
+Example 4: A hybrid cell line from male and female donors → 'Mixed'.
  
 26. Timepoint
- Annotate and standardize timepoint information from GEO metadata.
- Identify when a sample was collected relative to events, stages, or factors.
+Annotate and standardize timepoint information from GEO metadata.
+Identify when a sample was collected relative to events, stages, or factors.
 Timepoints can be 'NA' if no time dimension applies (e.g., purely cross-sectional data with no mention of collection timing). Always verify that any 'Day X' or 'Week X' matches the GSE-level conventions (e.g., '7 days post-inoculation' → 'Post-inoculation Day: 7').
 
- Potential Timepoint Types:
+Potential Timepoint Types:
 (1). Pre/Post-Event: Defined relative to a key event, such as inoculation, treatment, surgery, or drug administration. (for example, Pre-treatment Day: -1, Post-treatment Hour: 24; Post-surgery Week: 2)
 (2). Developmental: Based on the biological or developmental stage of the organism. (for example, Gestational Day: 14; Postnatal Day: 7; Embryonic Day: 10)
 (3). Chronological: Absolute time markers, often tied to the experimental design (Day: 7; Week: 2; Month: 1)
@@ -294,7 +306,7 @@ Examples: (Baseline; Follow-Up Month: 3; Follow-Up Year: 5)
 (5). Event-Driven: Associated with external stimuli or interventions. (Post-inoculation Day: 14; Post-challenge Hour: 4)
 (6). Behavioral/Physiological: Defined by symptoms or biological responses. (First Symptom Day; Onset of Fever)
 (7). Cyclic/Rhythmic: Relevant for circadian rhythm studies or periodic sampling. (Circadian Phase: ZT12; Diurnal Hour: 16)
-(8). Age-Based: Biological age of the subject used explicitly or inferred as a timepoint. (Age: 12 Weeks)
+(8). Age-Based: Use only when biological age is explicitly designated as the sampling timepoint in the metadata, for example, 'Age: 12 Weeks'. Do not calculate an effective age by combining baseline age with elapsed experimental time.
 
 Lastly, please follow the following Strategies for Annotating Timepoints:
 Step 1: Review GSE Overall Design and Summary
@@ -308,7 +320,7 @@ Step 2: Parse Individual GSM Metadata
 - Examples: 
 GSE overall summary says  48 samples collected at 7, 14, and 28 days 'post-inoculation'). And specific GSM Metadata includes  timepoint: D7 → Annotation: Post-inoculation Day: 7
 GSM Metadata: timepoint: baseline → Annotation: Baseline
-For missing or ambiguous timepoints, infer from replicates or GSE-level descriptions, or label as unknown. 
+For missing or ambiguous timepoints, annotate as 'NA'. Do not infer a timepoint from replicate numbering, sample identifiers, or unsupported assumptions.
  
 Step 3: Standardize Timepoint Information
 Map all extracted timepoints to a consistent format: 
@@ -316,31 +328,28 @@ Map all extracted timepoints to a consistent format:
 Examples: 
 7 days post-inoculation → Post-inoculation Day: 7
 14 days post-treatment → Post-treatment Day: 14
-Step 4: Address Age-Related Timepoints
-When timepoints can be derived from age: 
-Example: 
-Baseline age: 12 weeks
-Timepoint: 14 days post-inoculation
-Effective age: 14 weeks
- If no timepoint or it is truly not relevant, annotate ‘NA.’
-  If ambiguous or missing: 'NA'.
+Step 4: If no timepoint or it is truly not relevant, annotate ‘NA.’
+If ambiguous or missing: 'NA'.
 
 27. Outcome
  'The Outcome field is a unified annotation field designed to capture all relevant treatment-related and prognostic outcomes for both patient-level and cell line data. It provides a structured and standardized way to represent treatment response, survival status, and prognosis information in a single, parsable format.'
  The Outcome field integrates three components (if available): 'Response', 'Survival', and 'Prognosis'.
 (1). Response:
  'Describes the subject's or sample's response to treatment.'
+
  - For patients:
  'Responder': Complete remission or significant response.
  'Partial Responder': Partial remission or partial improvement.
  'Stable Disease': No progression or improvement.
  'Non-Responder': Disease progression or no response.
  'Unknown': Ambiguous or unclear response.
+
  - For cell lines:
  'Sensitive': Effective response (e.g., growth inhibition).
  'Partially Sensitive': Moderate or partial response.
  'Resistant': No response or lack of inhibition.
  'Unknown': Ambiguous or unclear response.
+
 (2). Survival:
  'Represents survival data for patients, including survival time and status.'
  Format: '[Survival_Time]: [Status]'
@@ -356,11 +365,11 @@ Effective age: 14 weeks
  'Poor Prognosis': Unfavorable or high-risk outcome expected.
  'Unknown': Prognosis unclear or not reported.
 
- (4) Combining Multiple Aspects:
+(4) Combining Multiple Aspects:
 You may combine Response, Survival, and Prognosis in the same cell by separating them with semicolons.
 Example: Responder; 36 Months: Alive; Good Prognosis
 
- (5) Outcome Annotation Examples:
+(5) Outcome Annotation Examples:
 Below are example scenarios demonstrating how to annotate Response, Survival, and Prognosis within the Outcome field for both patient-level and cell-line samples. Each scenario provides a short description of the sample’s situation, followed by the recommended Outcome Annotation.
 *Patient-Level Examples:*
 Scenario: Complete remission, survived 36 months

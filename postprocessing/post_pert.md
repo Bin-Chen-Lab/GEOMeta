@@ -1,16 +1,24 @@
-As a Biological Data Analyst with expertise in pharmacology and chemistry, your task is to recognize variations in perturbation terms, understand their biological, pharmacological, or chemical significance, and standardize them accordingly. You are responsible for creating consistent and accurate standardization of treatment descriptions, focusing on clarity, uniformity, and scientific accuracy. Please standardize the perturbation term: {row['Pert_Pre']} 
+Agent task: Perturbation standardization
 
-Guidelines for Standardization:
+Standardize the `Pert` field according to the rules below. Preserve the input order and return one standardized value for each original term.
 
-Before starting the standardization, check the total number of Original Terms provided. Ensure that the order of terms in your Standardized terms matches the exact order in the input data. Standardize each Original Term sequentially without omission, and verify that the total number of Standardized Terms matches the count in the input.
 
-1. Review Existing Data: Examine the drug treatment information to identify inconsistencies, variations, and errors in drug names, dosages, and other treatment details.
+## General Requirements
 
-2. Establish Standardization Guidelines: Define standardization guidelines or rules to guide the harmonization process. Consider factors such as drug naming conventions, generic and brand names of drugs, and known abbreviations.
+- Preserve the original input order.
+- Maintain a strict one-to-one correspondence between original and standardized terms.
+- Do not skip, reorder, duplicate, split, or merge input rows.
+- Apply only the field-specific rules defined below.
 
-3. Re-Ordering and Grouping: Re-order similar variations of drug names and treatment details to establish a consistent format. Group together drugs that represent the same medication but are described differently, ensuring that all names are standardized to a common form.
+## Standardization Rules
 
-4. Consider Case-Insensitivity: Convert all drug names and treatment details to lowercase to ensure uniformity.
+1. Identify equivalent perturbation terms, spelling variants, abbreviations, synonyms, and formatting differences.
+
+2. Apply the standardization rules below consistently across equivalent terms.
+
+3. Preserve the original input order and the order of components within multi-component perturbations. Do not reorder input rows.
+
+4. Treat matching and comparison as case-insensitive, but format final standardized perturbation names according to the capitalization rules below.
 
 5. Standardize Abbreviations: Standardize abbreviations used in drug names or treatment details to their full, unabbreviated forms wherever applicable. This helps avoid ambiguity and misinterpretation. For instance:
 - 'TCDD' should be expanded to '2,3,7,8-tetrachlorodibenzo-p-dioxin.'
@@ -53,11 +61,11 @@ Before starting the standardization, check the total number of Original Terms pr
 -'TGFβ1 + IL-6 + IL-1β + IL-21 + Anti-IL-4 + Anti-IFNγ + Anti-IL-12' should be standardized to 'TGF Beta 1 + Interleukin-6 + Interleukin-1 Beta + Interleukin-21 + Anti-Interleukin-4 Antibody + Anti-IFN Gamma Antibody + Anti-Interleukin-12 Antibody'.
                 
 16. Best Known Synonym: Use the best known synonym for each term to ensure clarity and consistency. For example:
-- 'Adriamycin' is better known as 'doxorubicin.'
+- 'Adriamycin' is better known as 'Doxorubicin.'
 - 'AG-221' is better known as 'enasidenib.'
 - 'LPS' should be expanded to 'lipopolysaccharide.'
 - 'M-CSF' should be expanded to 'macrophage colony-stimulating factor.'
-- 'β-Estradiol' should be standardized as 'beta-estradiol.'
+- 'β-Estradiol' should be standardized as 'Beta-estradiol.'
 
 17. Maintain Hyphenated Forms: Keep all similar terms with a hyphen in their standardized forms. For example: '17-betaestradiol' and '17beta-estradiol' should both be standardized to '17-Beta Estradiol.'
 
@@ -92,7 +100,7 @@ Before starting the standardization, check the total number of Original Terms pr
 - `24 Hour Fast`, `24 Hour Fasted`, and `24 Hour Food Deprivation` all become `24 Hour Fasting`
 - `Sleep Deprivation` and `Sleep Deprived` become `Sleep Deprived`
 - `Stimulated` or `Stimulation` both become `Stimulated`
-- `Activated or `Activation` both become `activated`.
+- `Activated or `Activation` both become `Activated`.
 
 25. Wildtype Notation: Convert any variations like `Wild-Type`, `WT`, and `Wild-Type Snai1` to `Wildtype`.
 
@@ -151,9 +159,10 @@ Examples:
 - 'Saline Solution' becomes 'Control (Saline)'.
 - 'Saline Self Administration' becomes 'Control (Saline)'.
 - 'Sesame Oil Control' becomes 'Control (Sesame Oil)'.
+
 39. Consistency in Gene Symbol Capitalization: Maintain consistent capitalization of gene symbols according to species-specific conventions.
-- For mouse genes, use all lowercase letters.
-- For human genes, use all uppercase letters.                 
+- For mouse genes, use an initial uppercase letter followed by lowercase letters when organism context is available, for example, Trp53 and Myc.
+- For human genes, use uppercase gene symbols, for example, TP53 and MYC. When organism context is unavailable, preserve the original capitalization.             
             
 40. Standardize Temperature Notation: Always use the '°C' symbol for degrees Celsius.
 Example: 'Activated at 37 Degrees Celsius' becomes 'Activated at 37°C'.
@@ -214,8 +223,7 @@ Doxorubicin 3 µM for 3 days → Doxorubicin
 Nintedanib 1 µM	→ Nintedanib
 Paclitaxel 10 nM 24h → Paclitaxel
 Tamoxifen (5 µM, 48 hours) → Tamoxifen
-Radiation (5 Gy, 30 mins)	→ Radiation
-
+Radiation (5 Gy, 30 mins) → Radiation
 
 49. Final Review and Correction: Final review the standardized drug treatment information to verify accuracy and address any remaining inconsistencies or errors. Make corrections as needed.            
             
@@ -223,9 +231,7 @@ Radiation (5 Gy, 30 mins)	→ Radiation
                 
 51. Formatting Guidelines: Ensure all drug names are presented in a standardized format. This includes using a consistent format for similar terms. Do not provide explanations in any format.
             
-52. Create a table with two columns:
+## Output Requirements
 
-Column 1: List each original term separately.
-
-Column 2: Provide the standardized Pert Name corresponding to each original term.
-
+Return exactly one standardized value for each original term.
+Do not include explanations or additional commentary.

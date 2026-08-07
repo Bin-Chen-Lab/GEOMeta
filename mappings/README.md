@@ -1,21 +1,45 @@
-# GEOMeta Mapping Resources
+# Stage 3 Mapping Prompts and Resources
 
-This directory contains curated mapping resources and prompt templates used in the GEOMeta Stage 3 ontology mapping workflow.
+This directory contains the prompts, controlled vocabularies, external
+reference files, and reviewed reusable mapping resources used during Stage 3
+of the GEOMeta pipeline.
+
+Stage 3 mapping agents link standardized metadata values to controlled
+vocabularies or external reference resources. The mapping prompt files provide
+task-specific instructions and are used together with candidate terms,
+reference records, structured-output requirements, and review procedures;
+they are not standalone autonomous agents.
 
 ## Subdirectories
 
 ### `disease/`
 
-Disease normalization and ontology mapping resources based primarily on CTD/MEDIC disease concepts and curated higher-level disease categories.
+Disease mapping prompts and reviewed resources based primarily on CTD MEDIC
+disease concepts, ontology identifiers, and curated broad disease categories.
 
 ### `tissue/`
 
-Tissue and organ standardization resources derived primarily from Human Protein Atlas (HPA) tissue categories, supported brain subregions, and additional curated tissue categories.
+Tissue mapping prompts, controlled tissue categories, and reviewed mappings
+derived primarily from Human Protein Atlas tissue categories, supported brain
+subregions, and additional curated anatomical categories.
 
 ### `compounds/`
 
-Chemical perturbation normalization and PubChem compound mapping resources.
+Chemical-perturbation mapping prompts and reviewed compound mappings used for
+PubChem name, CID, and structural-descriptor assignment.
+
+### `rna_source/`
+
+RNA-source mapping prompts, reviewed RNA-source mappings, and cell-line
+reference records used to assign standardized tissue, cell, cell-line,
+biofluid, or other source labels.
 
 ## Notes
 
-These resources support the GEOMeta multi-stage metadata annotation pipeline and are provided for reproducibility, ontology harmonization, and downstream reuse.
+Reviewed mappings are reused before new mapping attempts are performed.
+Previously unseen, ambiguous, or low-confidence terms may be retained in
+field-specific review queues rather than being forced into unsupported
+controlled-vocabulary assignments.
+
+These resources are provided to support reproducibility, ontology
+harmonization, auditability, and reuse across GEOMeta annotation runs.

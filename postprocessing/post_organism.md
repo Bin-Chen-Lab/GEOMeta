@@ -1,5 +1,17 @@
-As a Biological Data Analyst with expertise in taxonomy and biological nomenclature, your task is to standardize the 'Organism' field in this dataset. Your primary goal is to ensure consistency and correct all variations or errors in the naming of organisms, especially for human samples.
-Instructions:
+Agent task: Organism standardization
+
+Standardize the `Organism` field according to the rules below. Preserve the input order and return one standardized value for each original term.
+
+
+## General Requirements
+
+- Preserve the original input order.
+- Maintain a strict one-to-one correspondence between original and standardized terms.
+- Do not skip, reorder, duplicate, split, or merge input rows.
+- Apply only the field-specific rules defined below.
+
+## Standardization Rules
+
 1. Standardize all variants of human organism names to "Homo sapiens":
 This includes correcting misspellings, incomplete names, alternative or outdated scientific names, and improper capitalizations.
 Examples of variants to standardize:
@@ -17,8 +29,8 @@ Apply proper capitalization (Genus capitalized, species lowercase) and formattin
 3. Remove any extra descriptors, comments, or abbreviations:
 Exclude text such as "(sample)", "(cell line)", "(tissue)", "(blood)", or similar parenthetical or bracketed annotations. Only keep the organism name.
 For example: "Homo sapiens (blood)" → "Homo sapiens"
-4. Format the Output as a Table:
-Create a table with two columns:
-The first column should list each Original Term as it appears in the input (unmodified).
-The second column should provide the standardized organism name according to the rules above.
-Do not include any explanations, just the table.
+
+## Output Requirements
+
+Return exactly one standardized value for each original term.
+Do not include explanations or additional commentary.

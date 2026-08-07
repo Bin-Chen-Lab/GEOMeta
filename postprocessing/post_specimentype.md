@@ -1,37 +1,104 @@
-As a Biological Data Analyst specializing in biospecimen annotation and standardization, your primary task is to harmonize the “Specimen_Type_split_concat” field for downstream analyses. The goal is to standardize variations, abbreviations, and synonyms into a set of clear, domain-accepted terms. Apply the following rules strictly:
+Agent task: Specimen-type standardization
 
-1. Consolidate patient-derived xenograft terminology:
-Map all variants such as “PDX”, “pdx”, and “Patient-Derived Xenograft (PDX)” to “Patient-Derived Xenograft”.
+Standardize the `Specimen_Type` field according to the rules below. Preserve
+the input order and return one standardized value for each original term.
 
-2. Harmonize pluripotent stem cell terms:
-Map “Induced Pluripotent Stem Cells (iPSCs)”, “Induced Pluripotent Stem Cells”, “iPSC”, and “iPSCs” to “iPSC”.
+## General Requirements
 
-3. Unify cell line designations:
-“Cell Line” and any minor spelling/capitalization variants (e.g., “cell line”, “Cell line”) should be standardized as “Cell Line”.
+- Preserve the original input order.
+- Maintain a strict one-to-one correspondence between original and standardized terms.
+- Do not skip, reorder, duplicate, split, or merge input rows.
+- Use only the canonical Specimen_Type categories defined below.
+- Do not create new Specimen_Type categories.
 
-4. Primary cell and tissue distinctions:
-Map both “Primary Cells” and “Primary Tissue” to their respective standard forms, with correct capitalization.
-For general or ambiguous terms like “Tissue”, retain “Tissue” unless more detail is available.
+## Canonical Categories
 
-5. Isolated cells:
-“isolated cells” should remain “Isolated Cells”.
+Each standardized value must be exactly one of:
 
-6. Embryonic/fetal terms:
-“Fetus” should remain “Fetus”.
-“embryo”, standardize to “Embryo”.
+- Primary Tissue
+- PDX
+- Cell Line
+- Organoid
+- Isolated Cells
+- Fetus
+- Tissue Culture
+- NA
 
-7. Exosomes and extracellular vesicles:
-“Exosomes” should remain “Exosomes”.
+## Standardization Rules
 
-8. Case normalization and typographical corrections:
-Correct capitalization and fix any spelling errors or stray whitespace.
-Remove parenthetical remarks except where required for disambiguation (as in “Patient-Derived Xenograft”).
+1. Primary Tissue
 
-9. Remove duplicate or ambiguous variants:
-Where specimen terms are synonymous, retain only the primary, standardized version as described above.
+Use `Primary Tissue` for intact tissue obtained directly from an organism
+without ex vivo culture.
 
-10. Format output as a two-column table:
-Column 1: Original Term (exact, as provided in the input)
-Column 2: Standardized Term (your harmonized value per the rules above)
-Ensure output is accurate, domain-consistent, and suitable for use in downstream transcriptomic or EHR-linked analyses. Do not include any explanation and only the standardized table.
+Examples:
+- Primary tissue → Primary Tissue
+- Fresh tissue → Primary Tissue
+- Frozen tissue → Primary Tissue
+- Tissue → Primary Tissue when the term clearly refers to directly obtained
+  biological tissue and no cultured model is indicated.
 
+2. PDX
+
+Standardize all patient-derived xenograft variants to `PDX`.
+
+Examples:
+- PDX → PDX
+- pdx → PDX
+- Patient-Derived Xenograft → PDX
+- Patient-Derived Xenograft (PDX) → PDX
+
+3. Cell Line
+
+Use `Cell Line` for established cell-line cultures, including pluripotent stem
+cell lines when represented as cultured cell-line systems.
+
+Examples:
+- Cell line → Cell Line
+- Cell Line → Cell Line
+- iPSC → Cell Line
+- iPSCs → Cell Line
+- Induced Pluripotent Stem Cells → Cell Line
+- Embryonic Stem Cell Line → Cell Line
+
+4. Organoid
+
+Standardize organoid and organoid-like 3D culture terms to `Organoid` when
+they clearly represent an organoid system.
+
+5. Isolated Cells
+
+Use `Isolated Cells` for specific cell populations isolated or enriched from
+tissue, blood, or biological fluids.
+
+Examples:
+- Isolated cells → Isolated Cells
+- PBMCs isolated from blood → Isolated Cells
+- Sorted cells → Isolated Cells
+
+6. Fetus
+
+Use `Fetus` only when the specimen directly represents fetal biological
+material and no more specific cultured or isolated-cell category applies.
+
+7. Tissue Culture
+
+Use `Tissue Culture` for tissue sections or intact tissues maintained ex vivo
+in culture while retaining tissue architecture.
+
+8. Unsupported or Unclear Terms
+
+Use `NA` when the input cannot be assigned confidently to one of the canonical
+Specimen_Type categories.
+
+Examples:
+- Exosomes → NA
+- Extracellular vesicles → NA
+
+Do not create new categories such as `Exosomes`, `Embryo`, `Tissue`, or
+`Patient-Derived Xenograft`.
+
+## Output Requirements
+
+Return exactly one standardized value for each original term.
+Do not include explanations or additional commentary.

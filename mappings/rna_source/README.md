@@ -1,19 +1,50 @@
-# RNA Source Mapping
+# RNA-Source Mapping Resources
 
-This folder contains the reviewed RNA-source mapping resources used by the GEOMeta pipeline.
+This folder contains reviewed RNA-source mapping resources used in the
+GEOMeta Stage 3 mapping workflow.
 
-The main mapping file is RNA_Source_mappings.xlsx. This file must contain two required columns: Original_RNA_Source_Term and RNA_Source_Mapped.
+## Files
 
-The pipeline maps new RNA-source annotations from RNA_Source_Pre to RNA_Source_Mapped.
+### `rna_source_mapping_prompt.md`
 
-The mapping workflow follows a reuse-first strategy. If RNA_Source_Pre matches a reviewed term in Original_RNA_Source_Term, the corresponding RNA_Source_Mapped value is used directly. Blank values in RNA_Source_Mapped are intentional when the source term should not receive a final RNA-source label.
+Task-specific instructions used to review and map previously unseen
+RNA-source terms.
 
-For new terms not found in the reviewed mapping file, the pipeline applies deterministic RNA-source cleanup rules. Unresolved terms are exported to a review queue for manual or LLM-assisted curation.
+### `RNA_Source_mappings.xlsx`
 
-The optional cell-line reference file is cell_line_model_reference.csv. This file is used only for confident cell-line name standardization and should contain CellLineName and StrippedCellLineName.
+Reviewed reusable RNA-source mapping table. The required fields include:
 
-The LLM/manual review prompt is rna_source_mapping_prompt.md. This prompt is used for reviewing new RNA-source terms before adding them permanently to RNA_Source_mappings.xlsx.
+- `Original_RNA_Source_Term`: RNA-source term entering the reviewed mapping
+  workflow.
+- `RNA_Source_Mapped`: final reviewed release-level RNA-source label.
 
-Final RNA-source labels should use one of the following formats: Tissue: xx, Cells: xx, Cell Line: xx, Biofluid: xx, Other, or blank/NA.
+The workflow follows a reuse-first strategy. When an incoming
+`RNA_Source_Pre` value matches a reviewed `Original_RNA_Source_Term`, the
+corresponding `RNA_Source_Mapped` value is reused.
 
-The reviewed mapping file is the source of truth. New mappings should only be added after review.
+### `cell_line_model_reference.csv`
+
+Cell-line model metadata reference used for confident cell-line name
+standardization. Canonical names are obtained from `CellLineName` or
+`StrippedCellLineName` when available. Additional fields such as `CCLEName`,
+`ModelIDAlias`, `RRID`, and `ModelID` may be used for candidate matching and
+audit information.
+
+## Mapping workflow
+
+For terms not present in the reviewed mapping table, the pipeline applies
+deterministic cleanup rules and the RNA-source mapping prompt. Ambiguous or
+low-confidence terms may be exported for review rather than forced into a
+release-level category.
+
+Final RNA-source labels are restricted to:
+
+- `Tissue: xx`
+- `Cells: xx`
+- `Cell Line: xx`
+- `Biofluid: xx`
+- `Other`
+- `null`
+
+The reviewed mapping table is the reusable source of truth. New mappings
+should be incorporated only after review.

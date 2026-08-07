@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Dict, List, Any
 
@@ -105,31 +104,35 @@ class ReviewerV2:
             gse_id = _s(row.get("GSE_ID"))
 
             sex = _s(row.get("Sex_Post"))
-            organ = _s(row.get("Organ_Region_Post"))
+            tissue = _s(row.get("Tissue_Post"))
             pert = _s(row.get("Pert_Post"))
             pert_type = _s(row.get("Pert_Type"))
             sample_type = _s(row.get("SampleType"))
             disease = _s(row.get("Disease_Post"))
 
-            female_organs = {"ovary", "uterus", "cervix", "endometrium", "placenta"}
-            male_organs = {"testis", "prostate", "epididymis"}
-            organ_norm = organ.lower()
+            female_tissue = {"ovary", "uterus", "cervix", "endometrium", "vagina", "fallopian tube"}
+            male_tissue = {"testis", "prostate", "epididymis","seminal vesicle", "vas deferens","penis",}
+            tissue_norm = tissue.lower()
 
-            if sex == "Male" and any(x in organ_norm for x in female_organs):
+            if sex == "Male" and any(x in tissue_norm for x in female_tissue):
                 self.add_issue(
-                    gsm_id, gse_id, "sex_organ_conflict", "Sex_Post", "high",
-                    f"Sex_Post=Male but Organ_Region_Post={organ}.",
+                    gsm_id, gse_id, "sex_tissue_conflict", "Sex_Post", "high",
+                    f"Sex_Post=Male but Tissue_Post={tissue}.",
                     "rerun_field",
                 )
 
-            if sex == "Female" and any(x in organ_norm for x in male_organs):
+            if sex == "Female" and any(x in tissue_norm for x in male_tissue):
                 self.add_issue(
-                    gsm_id, gse_id, "sex_organ_conflict", "Sex_Post", "high",
-                    f"Sex_Post=Female but Organ_Region_Post={organ}.",
+                    gsm_id,
+                    gse_id,
+                    "sex_tissue_conflict",
+                    "Sex_Post",
+                    "high",
+                    f"Sex_Post=Female but Tissue_Post={tissue}.",
                     "rerun_field",
                 )
 
-            control_terms = {"Untreated", "Vehicle Control", "DMSO", "PBS", "Saline", "Mock", "Control"}
+            control_terms = {"Untreated", "Vehicle Control", "DMSO", "PBS", "Saline", "Mock", "Control","Vehicle",}
             if pert in control_terms and pert_type not in {"CTL", "NA"}:
                 self.add_issue(
                     gsm_id, gse_id, "pert_control_conflict", "Pert_Type", "medium",
@@ -147,10 +150,10 @@ class ReviewerV2:
                             "manual_review",
                         )
 
-            if disease == "NA" and organ not in {"NA", "Unknown"}:
+            if disease == "NA" and tissue not in {"NA", "Unknown"}:
                 self.add_issue(
                     gsm_id, gse_id, "missing_key_field", "Disease_Post", "low",
-                    "Disease_Post is NA while Organ_Region_Post is present.",
+                    "Disease_Post is NA while Tissue_Post is present.",
                     "rerun_field",
                 )
 

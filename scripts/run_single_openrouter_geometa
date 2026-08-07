@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+set -u
+set -o pipefail
+
+# ============================================================
+# Single-model GEOMeta OpenRouter run
+# - Full pipeline
+# - Stage1 QA3 smart enabled
+# - Records OpenRouter usage before/after
+# - Saves full log
+# - Appends one-row benchmark CSV
+# ============================================================
+
+export PYTHONNOUSERSITE=1
+export PYTHONPATH=.
+
+export LLM_API_TYPE=openai_compatible
+export LLM_BASE_URL=https://openrouter.ai/api/v1
+
+# Use existing terminal LLM_API_KEY if available; otherwise use the key below. # Do not commit the real key to GitHub. export LLM_API_KEY="${LLM_API_KEY:-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}" 
+INPUT_FILE="${INPUT_FILE:-input/gse_ids_BC.csv}" 
+MODEL="${MODEL:-mistralai/mistral-large-2512}" 
+RUN_PREFIX="${RUN_PREFIX:-bc118_pilot}" 
+BENCHMARK_CSV="artifacts/ledgers/bc118_single_model_runs.csv"   
+
+mkdir -p artifacts/logs artifacts/ledgers artifacts/outputs artifacts/review_queue
+
+get_openrouter_usage() {
+python - <<'PY'
+import json
+import os
+import urllib.request
+
+api_key = os.environ.get("LLM_API_KEY", "").strip()
+if not api_key:
+    print("NA")
+    raise SystemExit(0)
+
+req = urllib.request.Request(
+    "https://openrouter.ai/api/v1/key",
+    headers={"Authorization": f"Bearer {api_key}"},
+)
+
+try:
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    usage = data.get("data", {}).get("usage", None)
+    print("NA" if usage is None else usage)
+except Exception:
+    print("NA")
+PY
+}
+
+calc_delta() {
+python - "$1" "$2" <<'PY'
+import sys
+
+before = sys.argv[1]
+after = sys.argv[2]
+
+try:
+    b = float(before)
+    a = float(after)
+    print(round(a - b, 6))
+except Exception:
+    print("NA")
+PY
+}
+
+MODEL_SAFE=$(echo "$MODEL" | sed 's#[/:.-]#_#g')
+RUN_VERSION="${RUN_PREFIX}_${MODEL_SAFE}_$(date +%Y%m%d_%H%M%S)"
+LOG_FILE="artifacts/logs/${RUN_VERSION}.log"
+SUMMARY_JSON="artifacts/ledgers/${RUN_VERSION}_full_pipeline_summary.json"
+
+export LLM_MODEL="$MODEL"
+
+START_TIME=$(date '+%Y-%m-%d %H:%M:%S')
+START_EPOCH=$(date +%s)
+USAGE_BEFORE=$(get_openrouter_usage)
+
+if [ ! -f "$BENCHMARK_CSV" ]; then
+  echo "model,run_version,input_file,start_time,end_time,runtime_seconds,runtime_minutes,exit_code,openrouter_usage_before,openrouter_usage_after,openrouter_usage_delta,log_file,summary_json,notes" > "$BENCHMARK_CSV"
+fi
+
+{
+  echo "============================================================"
+  echo "MODEL: $MODEL"
+  echo "RUN_VERSION: $RUN_VERSION"
+  echo "INPUT_FILE: $INPUT_FILE"
+  echo "START_TIME: $START_TIME"
+  echo "OPENROUTER_USAGE_BEFORE: $USAGE_BEFORE"
+  echo "LLM_API_TYPE: $LLM_API_TYPE"
+  echo "LLM_BASE_URL: $LLM_BASE_URL"
+  echo "STAGE1_QA3_MODE: smart"
+  echo "STAGE1_QA3_FIELDS: GSE_Pert,GSM_Pert,RNA_Source,Tissue"
+  echo "============================================================"
+  echo ""
+} | tee "$LOG_FILE"
+
+PYTHONNOUSERSITE=1 PYTHONPATH=. python -u scripts/run_pipeline.py \
+  --workdir . \
+  --gse-file "$INPUT_FILE" \
+  --run-version "$RUN_VERSION" \
+  --stage1-qa3-mode smart \
+  --stage1-qa3-fields GSE_Pert,GSM_Pert,RNA_Source,Tissue \
+  2>&1 | tee -a "$LOG_FILE"
+
+EXIT_CODE=${PIPESTATUS[0]}
+
+END_TIME=$(date '+%Y-%m-%d %H:%M:%S')
+END_EPOCH=$(date +%s)
+RUNTIME_SECONDS=$((END_EPOCH - START_EPOCH))
+RUNTIME_MINUTES=$(python - <<PY
+print(round($RUNTIME_SECONDS / 60, 3))
+PY
+)
+
+USAGE_AFTER=$(get_openrouter_usage)
+USAGE_DELTA=$(calc_delta "$USAGE_BEFORE" "$USAGE_AFTER")
+
+{
+  echo ""
+  echo "============================================================"
+  echo "MODEL: $MODEL"
+  echo "RUN_VERSION: $RUN_VERSION"
+  echo "END_TIME: $END_TIME"
+  echo "RUNTIME_SECONDS: $RUNTIME_SECONDS"
+  echo "RUNTIME_MINUTES: $RUNTIME_MINUTES"
+  echo "EXIT_CODE: $EXIT_CODE"
+  echo "OPENROUTER_USAGE_AFTER: $USAGE_AFTER"
+  echo "OPENROUTER_USAGE_DELTA: $USAGE_DELTA"
+  echo "LOG_FILE: $LOG_FILE"
+  echo "SUMMARY_JSON: $SUMMARY_JSON"
+  echo "============================================================"
+} | tee -a "$LOG_FILE"
+
+echo "\"$MODEL\",\"$RUN_VERSION\",\"$INPUT_FILE\",\"$START_TIME\",\"$END_TIME\",\"$RUNTIME_SECONDS\",\"$RUNTIME_MINUTES\",\"$EXIT_CODE\",\"$USAGE_BEFORE\",\"$USAGE_AFTER\",\"$USAGE_DELTA\",\"$LOG_FILE\",\"$SUMMARY_JSON\",\"\"" >> "$BENCHMARK_CSV"
+
+echo ""
+echo "[DONE] Run version: $RUN_VERSION"
+echo "[DONE] Log saved to: $LOG_FILE"
+echo "[DONE] Benchmark CSV updated: $BENCHMARK_CSV"
+
+exit "$EXIT_CODE"
+

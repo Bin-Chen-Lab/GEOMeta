@@ -1,47 +1,82 @@
-As a Biological Data Analyst with expertise in pharmacology and chemistry, your task is to standardize the 'Route of Drug Administration' field. This involves identifying and correcting abbreviations, ensuring consistency in terminology, and categorizing the data into standardized terms. 
+Agent task: Route-of-administration standardization
 
-1. Before starting the standardization, check the total number of Original Terms provided. Ensure that the order of terms in your Standardized terms matches the exact order in the input data. Standardize each Original Term sequentially without omission, and verify that the total number of Standardized Terms matches the count in the input.
+Standardize the `Route_Admin` field according to the rules below. Preserve the input order and return one standardized value for each original term.
 
-2. Establish Standardization Guidelines: Define rules for handling common abbreviations and variations. For example, convert 'I.V.' to 'Intravenous' and 'S.C.' to 'Subcutaneous'. All routes should be described using full, unabbreviated terms.
+## General Requirements
 
-3. Re-Ordering and Grouping: Group similar administration routes together while ensuring that all descriptions are converted to a consistent format. For instance, group all variations of intraperitoneal injections under 'Intraperitoneal'.
+- Preserve the original input order.
+- Maintain a strict one-to-one correspondence between original and standardized terms.
+- Do not skip, reorder, duplicate, split, or merge input rows.
+- Preserve biologically meaningful route information.
+- Do not infer an administration route that is not supported by the input.
+- Use `NA` when administration route information is not applicable or cannot
+  be determined.
 
-4. Consider Case-Insensitivity: Treat all entries with case insensitivity by standardizing to a uniform case, generally sentence case.
+## Standardization Rules
 
-5. Handling Acronyms: Fully expand all acronyms to their full descriptions to avoid ambiguity. For example, 'I.P.' should be expanded to 'Intraperitoneal'.
+1. Expand Route Abbreviations
 
-6. Manual Review and Correction: After standardizing the terms, manually review the data to ensure accuracy and consistency across all entries. Make adjustments as needed to align with the established guidelines.
+Expand commonly used administration-route abbreviations to their full standardized forms.
 
-7. Formatting Guidelines: Use '+' with spaces to connect multiple routes of administration within the same treatment, ensuring a compact and clear representation.
-For example,
-Original Term: 'Intraperitoneal (I.P.) + Intranasal + Oral' → Standardized Term: 'Intraperitoneal + Intranasal + Oral'.
+Examples:
+- I.V. → Intravenous
+- IV → Intravenous
+- I.P. → Intraperitoneal
+- IP → Intraperitoneal
+- S.C. → Subcutaneous
+- SC → Subcutaneous
+- I.M. → Intramuscular
+- IM → Intramuscular
 
-8. Remove the hyphen between words for route of administration terms, and use the standardized form without the hyphen.
+2. Normalize Equivalent Route Terms
 
-Specifically, standardize 'Intra-tracheal' to 'Intratracheal' for consistency.
-Original Term: 'Intra-tracheal' → Revised Term: 'Intratracheal'
-            
-9. Use NA if not applicable.
-            
-10. Establish Standardization Guidelines:
-- Injection (unspecified):
-- Standardize 'Injection (unspecified)' to 'Injection' and ensure this applies uniformly across combinations.
-- Standardize terms that are case-sensitive or synonyms, e.g., 'Osmotic mini-pump' → 'Osmotic Minipump.'
-- Standardize terms to singular form unless plural is contextually required, e.g., 'Tail veins injection' → 'Tail Vein Injection'.
-           
- 11. Use 'Tail Vein Injection' as the standard term for all generic injections into the tail vein.
-Ensure consistent capitalization and wording regardless of variations in the input (e.g., lowercase, spacing).
-Standardize 'Tail Injection' to 'Tail Vein Injection'.
-Standardize 'Tail vein' to 'Tail Vein Injection'.
-            
-12. Format the Output as a Table:
- Create a table with two columns:
+Standardize spelling, capitalization, punctuation, and equivalent variants to a single consistent route label.
 
-Column 1: List each Original Term exactly as it appears in the input. Preserve Original Term and do not apply any formatting or transformations to the original input term. Simply copy it directly into the first column of the output.
-      
-Column 2: Provide the standardized term for each corresponding original term.
-                  
-Ensure accuracy and consistency based on pharmacological standards and domain expertise.
-Preserve all unique drug administration details in the standardization process.
-Do not include any explanations in any format.
+Examples:
+- intraperitoneal injection → Intraperitoneal
+- intraperitoneal → Intraperitoneal
+- intravenous injection → Intravenous
+- oral administration → Oral
+- subcutaneous injection → Subcutaneous
 
+3. Preserve Unspecified Injection Status
+
+If the metadata states only that an injection occurred but does not identify the route, standardize as: `Injection (unspecified)`
+
+Do not shorten this value to `Injection`, because the qualifier preserves the fact that the route was not specified.
+
+4. Normalize Specific Route Names
+Correct clear spelling or hyphenation variants.
+Examples:
+- Intra-tracheal → Intratracheal
+- intra tracheal → Intratracheal
+- Osmotic mini-pump → Osmotic Minipump
+
+5. Tail-Vein Administration
+Normalize tail-vein variants consistently.
+Examples:
+- Tail vein → Tail Vein Injection
+- Tail injection → Tail Vein Injection
+- Tail veins injection → Tail Vein Injection
+Do not use `Tail Vein Injection` when the input does not specifically indicate
+tail-vein administration.
+
+6. Administration Through Culture Medium
+When the treatment or compound is explicitly added to cell-culture medium,
+standardize as: `In Media`
+
+7. Multiple Routes
+When multiple routes apply to the same term, standardize each route
+individually and join them using: ` + `. Preserve their original order.
+Example: - Intraperitoneal (I.P.) + intranasal + oral → Intraperitoneal + Intranasal + Oral
+
+8. Preserve Specific Route Information
+Do not collapse a specific administration route to a broader or less informative label when the specific route is clearly provided.
+
+9. Missing or Non-applicable Information
+Use `NA` only when no administration route is applicable or when the route cannot be determined from the input.
+
+## Output Requirements
+
+Return exactly one standardized Route_Admin value for each original term.
+Do not include explanations or additional commentary.

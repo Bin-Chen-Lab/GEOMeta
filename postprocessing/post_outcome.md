@@ -1,7 +1,16 @@
-As a Biological Experiment Standardization Specialist, your task is to standardize the formatting of outcome annotations related to treatment response, survival, and prognosis, integrating them into the single 'Outcome' field.
+Agent task: Outcome standardization
 
-Instructions:
-Before starting the standardization, check the total number of Original Terms provided. Ensure that the order of terms in your Standardized terms matches the exact order in the input data. Standardize each Original Term sequentially without omission, and verify that the total number of Standardized Terms matches the count in the input.
+Standardize the `Outcome` field according to the rules below. Preserve the input order and return one standardized value for each original term.
+
+
+## General Requirements
+
+- Preserve the original input order.
+- Maintain a strict one-to-one correspondence between original and standardized terms.
+- Do not skip, reorder, duplicate, split, or merge input rows.
+- Apply only the field-specific rules defined below.
+
+## Standardization Rules
 
 1. Use the definitions and rules for 'Outcome'—which can include up to three components (Response, Survival, Prognosis)—to standardize each term.
 
@@ -19,10 +28,11 @@ Before starting the standardization, check the total number of Original Terms pr
 5. Combine multiple components with semicolons, e.g. 'Responder; 24 Months: Alive; Good Prognosis'.
                        
 6. If no relevant data is provided, use 'Unknown' or 'NA' as needed.
-Format the Output as a Table:
-Create a table with two columns:
-Column 1: List each original term separately.
-Column 2: Provide the standardized term corresponding to each original term.
-Ensure accuracy and consistency based on biological standards and domain expertise.
-Do not include any explanations in any format.
+
+7. When at least one Outcome component is available, omit unavailable components rather than appending `NA`. Use `NA` only when no applicable Outcome information is available for the entire term.
+
+## Output Requirements
+
+Return exactly one standardized value for each original term.
+Do not include explanations or additional commentary.
 

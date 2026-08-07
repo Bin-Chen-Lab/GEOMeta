@@ -1,39 +1,37 @@
-# Age Standardization Prompt
+Agent task: Age standardization
 
-## Role
+Standardize the `Age` field according to the rules below. Preserve the input order and return one standardized value for each original term.
 
-As a Biological Data Analyst, your primary task is to standardize the `Age` field using developmental biology knowledge.
+## General Requirements
 
-## General Instructions
-
-Before beginning, count the number of original terms. Ensure that:
-- The number of standardized terms matches the input count.
-- The order of standardized terms matches the original input order.
-- Terms are standardized sequentially without skipping entries.
+- Preserve the original input order.
+- Maintain a strict one-to-one correspondence between original and standardized terms.
+- Do not skip, reorder, duplicate, split, or merge input rows.
+- Apply only the field-specific rules defined below.
 
 ## Standardization Rules
 1. Range Formatting
 Use hyphens with no spaces to denote ranges.
- 10 to 12 weeks → 10-12 Weeks
- Five to seven weeks → 5-7 Weeks
- Six-eight weeks → 6-8 Weeks
+10 to 12 weeks → 10-12 Weeks
+Five to seven weeks → 5-7 Weeks
+Six-eight weeks → 6-8 Weeks
 
 2. Preserve Composite Durations
 Do not sum multiple durations; retain all as listed.
- 1 day + 4 days + 2 days → 1 Day + 4 Days + 2 Days
+1 day + 4 days + 2 days → 1 Day + 4 Days + 2 Days
 
 3. Zero Durations
 Use singular for zero units.
- 0 days → 0 Day
+0 days → 0 Day
 0 weeks → 0 Week
 
 4. Math Expressions
 Expand expressions like ± values.
- 12 ± 1 weeks → 11-13 Weeks
+12 ± 1 weeks → 11-13 Weeks
 
 5. Time Ranges
 Standardize expressions like to, through, and into hyphenated ranges.
- 5 to 9 days → 5-9 Days
+5 to 9 days → 5-9 Days
 
 6. In Vitro Age
 If the age describes time in vitro, set value to NA.
@@ -66,23 +64,23 @@ Use consistent terminology: "X Weeks Gestation" or "X Days Gestation".
 12. Format for Post-conception Expressions: Format as "X Weeks Y Days Post-conception". If Y = 0, simplify to "X Weeks Post-conception"
 
 Original Term	Standardized As
-8+4 Weeks	→ 8 Weeks 4 Days Post-conception
-10+1 Weeks	→  10 Weeks 1 Day Post-conception
-11+0 Weeks	11 Weeks Post-conception
+8+4 Weeks → 8 Weeks 4 Days Post-conception
+10+1 Weeks → 10 Weeks 1 Day Post-conception
+11+0 Weeks → 11 Weeks Post-conception
 
 13. Decimal Precision Rule:
-(1) For age values with 1 or 2 decimal places, preserve them as-is.
-(2) For age values with more than 2 decimal places, round to 2 decimal places using standard rounding rules. Applies to all units: Years, Months, Weeks, Days, Hours.
+First remove trailing zeros from decimal values.
+For remaining non-zero decimal precision:
+- Preserve values with up to 2 decimal places.
+- Round values with more than 2 decimal places to 2 decimal places. Applies to all units: Years, Months, Weeks, Days, Hours.
 Examples:
 46.5833333333333 Years	→46.58 Years
-9.99 Weeks	→ 9.99 Weeks (kept as-is)
-1.444 Days	→ 1.44 Days
-7.128456 Weeks	→ 7.13 Weeks
+9.99 Weeks → 9.99 Weeks (kept as-is)
+1.444 Days → 1.44 Days
+7.128456 Weeks → 7.13 Weeks
             
-14. Finally, follow the instructions as described above and present the final table. Do not provide any explanations in any form.
+## Output Requirements
 
-- Create a table with two columns:
-- List each original term separately in the first column.
-- Provide the standardized term in the second column, ensuring clarity and consistency in how ages are reported.
-- Apply biological nomenclature standards and domain expertise to ensure accuracy in the age standardization process.
+Return exactly one standardized value for each original term.
+Do not include explanations or additional commentary.
 

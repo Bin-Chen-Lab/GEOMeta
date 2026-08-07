@@ -18,6 +18,11 @@ Columns:
 - `Standardized_Tissue_Term`: normalized tissue term generated during initial standardization.
 - `Final_Mapped_Tissue_Term`: final reviewed tissue category used by GEOMeta.
 
+### `tissue_categories.xlsx`
+
+Controlled list of final tissue categories supported by the GEOMeta tissue mapping workflow. This resource defines the allowed release-level tissue
+categories used when reviewing and validating mapped tissue terms.
+
 ## Notes
 
 Mappings are based primarily on Human Protein Atlas tissue categories, with selected brain subregion handling. Additional curated categories were added for recurrent GEO tissue descriptors not adequately represented by the core HPA categories, including blood- and upper airway-related terms.

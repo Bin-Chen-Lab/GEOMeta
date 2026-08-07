@@ -285,7 +285,6 @@ def main():
     summary_path = Path(cfg.ledger_dir) / f"{cfg.run_version}_run_stage3_result.json"
     summary_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
 
-    print("[SAVED] Stage3 mapped Excel:", out_xlsx)
     print("[SAVED] Stage3 summary:", summary_path)
     print(json.dumps(result, indent=2))
 

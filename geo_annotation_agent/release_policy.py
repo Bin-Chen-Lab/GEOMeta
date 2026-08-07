@@ -693,8 +693,8 @@ def build_mode_a_stage3_5_report(
     if "Review_Required" in df.columns:
         review_required = (
             df["Review_Required"]
-            .fillna(False)
-            .astype(str)
+            .astype("string")
+            .fillna("")
             .str.strip()
             .str.upper()
         )
