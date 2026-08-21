@@ -517,5 +517,11 @@ GEOMeta makes use of data and reference resources from:
 - NCBI Gene Expression Omnibus (GEO)
 - Comparative Toxicogenomics Database (CTD/MEDIC)
 - PubChem
+
+# Citation
+
+If you use GEOMeta in your work, please cite:
+
+> Zhang X, Paithankar S, Pu J, Murtaza MS, Shankar R, Leshchiner D, Koirala S, Palmer Z, Nault R, Li X, Xie Y, Chen B. Automating scientific annotations for open transcriptomic profiles via multi-stage agents. bioRxiv (2026). https://doi.org/10.64898/2026.08.19.745739
 - Human Protein Atlas
 - Cancer Dependency Map (DepMap), Broad Institute
