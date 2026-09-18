@@ -17,7 +17,7 @@ export PYTHONPATH=.
 export LLM_API_TYPE=openai_compatible
 export LLM_BASE_URL=https://openrouter.ai/api/v1
 
-# Use existing terminal LLM_API_KEY if available; otherwise use the key below. # Do not commit the real key to GitHub. export LLM_API_KEY="${LLM_API_KEY:-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}" 
+# Use existing terminal LLM_API_KEY if available; otherwise use the key below. # Do not commit the real key to GitHub. " 
 INPUT_FILE="${INPUT_FILE:-input/gse_ids_BC.csv}" 
 MODEL="${MODEL:-mistralai/mistral-large-2512}" 
 RUN_PREFIX="${RUN_PREFIX:-bc118_pilot}" 
