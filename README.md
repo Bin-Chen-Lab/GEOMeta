@@ -34,6 +34,7 @@ The current curated GEOMeta release comprises **594,989 GSM samples from 22,782 
 ---
 
 # Installation
+The installation command retrieves compatible dependencies from conda-forge. The successful installation and demo were tested with Python 3.11.16, NumPy 2.4.6, pandas 3.0.6, scikit-learn 1.9.1, openpyxl 3.1.5, fastparquet 2026.5.0, requests 2.34.2, python-docx 1.2.0, RapidFuzz 3.14.6, and OpenAI Python SDK 3.17.0. Dependency versions are not pinned and may vary across installations. Users can inspect their installed versions using `conda list -n geometa`.
 
 ## 1. Clone Repository
 
@@ -96,6 +97,10 @@ print("GEOMeta dependencies imported successfully.")
 PY
 ```
 
+### Installation time
+
+Installation took approximately 2 minutes and 19 seconds on a MacBook Pro (Apple M2 Pro, 12-core CPU, 32 GB RAM) using Python 3.11 and Conda (osx-64). This included repository cloning (2 seconds), environment creation and dependency installation (49 seconds), and dependency verification (88 seconds). Installation time may vary depending on hardware, network conditions, and Conda package caching. LLM API account setup is excluded.
+
 ## 3. Configure the LLM backend
 
 GEOMeta uses an **OpenAI-compatible Chat Completions interface**. The backend is controlled by four environment variables:
@@ -128,10 +133,10 @@ For direct OpenAI use, `OPENAI_API_KEY` and `OPENAI_MODEL` are also accepted as 
 export LLM_API_TYPE="openai_compatible"
 export LLM_BASE_URL="https://openrouter.ai/api/v1"
 export LLM_API_KEY="your_openrouter_key"
-export LLM_MODEL="deepseek/deepseek-v4-flash-0731"
+export LLM_MODEL="google/gemini-3-flash-preview"
 ```
 
-The model above is an example configuration used during GEOMeta testing. Replace it with another model identifier available through your OpenRouter account if desired.
+The Gemini-3-flash-preview model above was used for the demo runtime benchmark described below. Replace it with another model identifier available through your OpenRouter account if desired.
 
 <details>
 <summary><strong>Other OpenAI-compatible backends</strong></summary>
@@ -264,6 +269,22 @@ PYTHONPATH=. python -u scripts/run_pipeline.py \
   --run-version geometa_GSE130063 \
   --stage1-qa3-mode smart
 ```
+
+## 4. Demo runtime and expected output
+
+The example input file (`input/gse_ids.csv`) contains two GEO studies, GSE130063 (24 samples) and GSE53779 (15 samples), comprising 39 samples. Using Gemini 3 Flash Preview (`google/gemini-3-flash-preview`) through OpenRouter, GEOMeta completed the demo in approximately **2 minutes and 15 seconds** with QA3 disabled (`--stage1-qa3-mode off`) and **4 minutes and 49 seconds** with targeted QA3 review enabled (`--stage1-qa3-mode smart`). Both runs were performed on a MacBook Pro (Apple M2 Pro, 32 GB RAM), including Conda startup and using previously retrieved GEO metadata from the local cache. Runtime may vary depending on dataset size, model selection, API latency, QA configuration, and cache availability.
+
+To run the quick demo with QA3 disabled, use:
+
+```bash
+PYTHONPATH=. python -u scripts/run_pipeline.py \
+  --workdir . \
+  --gse-file input/gse_ids.csv \
+  --run-version geometa_demo \
+  --stage1-qa3-mode off
+```
+
+The pipeline generates intermediate annotations and final standardized metadata under `artifacts/outputs/`. The simplified final release is saved as `geometa_demo_stage3_final_release.xlsx` for this example. Other runs use the filename prefix specified by `--run-version`.
 
 ---
 
@@ -499,6 +520,20 @@ cd "/path/containing spaces/GEOMeta"
 ls -lh input/gse_ids.csv
 ```
 
+### macOS LLM client initialization error
+
+If LLM client initialization fails with a `truststore` error related to macOS version detection, try launching GEOMeta through `conda run`:
+
+```bash
+conda run --no-capture-output -n geometa \
+  env PYTHONPATH=. python -u scripts/run_pipeline.py \
+  --workdir . \
+  --gse-file input/gse_ids.csv \
+  --run-version geometa_run \
+  --stage1-qa3-mode smart
+```
+
+This workaround was successfully used during testing on macOS 26.5 with Python 3.11.
 ---
 
 # Notes
