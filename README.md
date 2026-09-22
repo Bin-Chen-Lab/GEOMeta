@@ -36,6 +36,8 @@ The current curated GEOMeta release comprises **594,989 GSM samples from 22,782 
 # Installation
 The installation command retrieves compatible dependencies from conda-forge. The successful installation and demo were tested with Python 3.11.16, NumPy 2.4.6, pandas 3.0.6, scikit-learn 1.9.1, openpyxl 3.1.5, fastparquet 2026.5.0, requests 2.34.2, python-docx 1.2.0, RapidFuzz 3.14.6, and OpenAI Python SDK 3.17.0. Dependency versions are not pinned and may vary across installations. Users can inspect their installed versions using `conda list -n geometa`.
 
+The installation and demo were tested on macOS 26.5 using an Apple M2 Pro MacBook Pro with 32 GB RAM and a Conda osx-64 environment. The standard API-based workflow does not require a local GPU. Local model deployments may have additional hardware requirements.
+
 ## 1. Clone Repository
 
 First, move to the local folder where you want to download GEOMeta:
