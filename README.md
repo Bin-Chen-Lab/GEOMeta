@@ -206,11 +206,9 @@ print("LLM configuration detected successfully.")
 PY
 ```
 
-This verifies that GEOMeta can read the selected backend configuration without printing the API key.
+This verifies that GEOMeta can read the selected backend configuration without printing the API key. Model choice can affect annotation quality, runtime, API cost, and supported context length. For local or smaller-context models, make sure the model context window is compatible with the token-budget settings in `geo_annotation_agent/config.py` before running very large GSEs.
 
-Model choice can affect annotation quality, runtime, API cost, and supported context length. For local or smaller-context models, make sure the model context window is compatible with the token-budget settings in `geo_annotation_agent/config.py` before running very large GSEs.
-
-> Do not store API keys directly in the codebase or commit them to GitHub.
+Do not store API keys directly in the codebase or commit them to GitHub.
 
 ---
 # Running GEOMeta
@@ -254,9 +252,9 @@ Main arguments:
 
 ### QA3 modes
 
-- `smart` — Recommended for routine use. Performs targeted evidence-grounded review of selected fields and samples requiring additional validation.
-- `full` — Runs the broader QA3 workflow for comprehensive auditing or benchmarking.
-- `off` — Disables QA3 review.
+- `smart` — Recommended for routine use. Performs targeted evidence-grounded review of selected fields and samples requiring additional validation, with additional runtime and API costs.
+- `off` — Disables QA3 review for faster execution and lower API costs.
+- `full` — Performs broader QA3 review for comprehensive auditing or benchmarking, potentially requiring substantially more runtime and API usage.
 
 Eligible high-confidence QA3 corrections can be applied according to the configured release policy, while unresolved or ambiguous cases are retained for review.
 
@@ -272,7 +270,7 @@ PYTHONPATH=. python -u scripts/run_pipeline.py \
 
 ## 4. Demo runtime and expected output
 
-The example input file (`input/gse_ids.csv`) contains two GEO studies, GSE130063 (24 samples) and GSE53779 (15 samples), comprising 39 samples. Using Gemini 3 Flash Preview (`google/gemini-3-flash-preview`) through OpenRouter, GEOMeta completed the demo in approximately **2 minutes and 15 seconds** with QA3 disabled (`--stage1-qa3-mode off`) and **4 minutes and 49 seconds** with targeted QA3 review enabled (`--stage1-qa3-mode smart`). Both runs were performed on a MacBook Pro (Apple M2 Pro, 32 GB RAM), including Conda startup and using previously retrieved GEO metadata from the local cache. Runtime may vary depending on dataset size, model selection, API latency, QA configuration, and cache availability.
+The example input file (`input/gse_ids.csv`) contains two GEO studies, GSE130063 (24 samples) and GSE53779 (15 samples), comprising 39 samples. Using Gemini 3 Flash Preview (`google/gemini-3-flash-preview`) through OpenRouter, GEOMeta completed the demo in approximately 2 minutes and 15 seconds with QA3 disabled (`--stage1-qa3-mode off`) and 4 minutes and 49 seconds with targeted QA3 review enabled (`--stage1-qa3-mode smart`). Both runs were performed on a MacBook Pro (Apple M2 Pro, 32 GB RAM), including Conda startup and using previously retrieved GEO metadata from the local cache. Runtime may vary depending on dataset size, model selection, API latency, QA configuration, and cache availability.
 
 To run the quick demo with QA3 disabled, use:
 
@@ -324,7 +322,7 @@ Annotation_Prompts/
 
 ## Stage 2 — Field-Specific Standardization and Controlled Inference
 
-Stage 2 applies **21 field-specific standardization agent tasks**. Each combines a reusable prompt template, candidate terms from one metadata field, field-restricted instructions, and a structured output contract.
+Stage 2 applies 21 field-specific standardization agent tasks. Each combines a reusable prompt template, candidate terms from one metadata field, field-restricted instructions, and a structured output contract.
 
 Three controlled-inference tasks are also performed:
 
@@ -353,11 +351,11 @@ Stage 3 links standardized metadata to curated biomedical vocabularies and exter
 
 Major workflows include:
 
-- **Disease:** CTD/MEDIC mapping and disease hierarchy information
-- **Tissue:** curated GEOMeta tissue vocabulary
-- **RNA source:** reviewed mappings and cell-line reference matching
-- **Chemical perturbations:** reviewed mapping reuse and PubChem lookup with title/synonym verification
-- **Release validation:** deterministic checks of mapped fields, category consistency, within-GSE/global consistency, and perturbation mapping integrity
+- Disease: CTD/MEDIC mapping and disease hierarchy information
+- Tissue: curated GEOMeta tissue vocabulary
+- RNA source: reviewed mappings and cell-line reference matching
+- Chemical perturbations: reviewed mapping reuse and PubChem lookup with title/synonym verification
+- Release validation: deterministic checks of mapped fields, category consistency, within-GSE/global consistency, and perturbation mapping integrity
 
 Implemented in:
 
@@ -457,10 +455,10 @@ artifacts/              Runtime outputs, caches, ledgers, and review files
 
 # Current Mapping and Reference Resources
 
-- **Disease:** CTD/MEDIC and MeSH-compatible disease hierarchy information
-- **Tissue:** curated GEOMeta tissue vocabulary and brain-region normalization
-- **Chemical perturbations:** reviewed mappings and PubChem
-- **RNA source/cell lines:** reviewed RNA-source mappings and cell-line reference metadata
+- Disease: CTD/MEDIC and MeSH-compatible disease hierarchy information
+- Tissue: curated GEOMeta tissue vocabulary and brain-region normalization
+- Chemical perturbations: reviewed mappings and PubChem
+- RNA source/cell lines: reviewed RNA-source mappings and cell-line reference metadata
 
 ---
 
@@ -534,6 +532,7 @@ conda run --no-capture-output -n geometa \
 ```
 
 This workaround was successfully used during testing on macOS 26.5 with Python 3.11.
+
 ---
 
 # Notes
@@ -561,5 +560,3 @@ GEOMeta makes use of data and reference resources from:
 If you use GEOMeta in your work, please cite:
 
 > Zhang X, Paithankar S, Pu J, Murtaza MS, Shankar R, Leshchiner D, Koirala S, Palmer Z, Nault R, Li X, Xie Y, Chen B. Automating scientific annotations for open transcriptomic profiles via multi-stage agents. bioRxiv (2026). https://doi.org/10.64898/2026.08.19.745739
-
-––
