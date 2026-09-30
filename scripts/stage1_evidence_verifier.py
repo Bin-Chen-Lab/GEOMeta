@@ -40,6 +40,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 
+from geo_annotation_agent.config import default_config
+from geo_annotation_agent.llm_client import make_llm_from_config
 from geo_annotation_agent.token_budget import TokenBudget, check_messages_token_budget
 from geo_annotation_agent.release_policy import add_stage1_qa3_mode_a_flags
 
@@ -1388,37 +1390,7 @@ REVIEW_SCHEMA: Dict[str, Any] = {
 }
 
 
-def make_openai_client_from_env_or_cfg(cfg_obj: Any = None) -> Tuple[Any, str]:
-    """Return an OpenAI-compatible client and model/deployment name."""
-    from openai import AzureOpenAI, OpenAI
-
-    # Azure variables remain supported for local users.
-    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-    azure_key = os.getenv("AZURE_OPENAI_API_KEY")
-    azure_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
-    azure_api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2025-04-01-preview")
-
-    if azure_endpoint and azure_key and azure_deployment:
-        return AzureOpenAI(api_key=azure_key, azure_endpoint=azure_endpoint, api_version=azure_api_version), azure_deployment
-
-    if cfg_obj is not None:
-        api_key = clean_value(getattr(cfg_obj, "llm_api_key", ""))
-        base_url = clean_value(getattr(cfg_obj, "llm_base_url", ""))
-        model = clean_value(getattr(cfg_obj, "llm_model", ""))
-        if api_key and base_url and model:
-            return OpenAI(api_key=api_key, base_url=base_url), model
-
-    api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
-    model = os.getenv("LLM_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-5"
-
-    if api_key:
-        return OpenAI(api_key=api_key, base_url=base_url), model
-
-    raise RuntimeError("No LLM credentials found. Set LLM_API_KEY/OPENAI_API_KEY or Azure OpenAI variables.")
-
-
-def call_llm_review(client: Any, model_or_deployment: str, packet: Dict[str, Any], cfg_obj: Any | None = None) -> Dict[str, Any]:
+def call_llm_review(llm: Any, packet: Dict[str, Any], cfg_obj: Any | None = None) -> Dict[str, Any]:
     response_format = {
         "type": "json_schema",
         "json_schema": {
@@ -1441,17 +1413,17 @@ def call_llm_review(client: Any, model_or_deployment: str, packet: Dict[str, Any
         action=str(getattr(cfg_obj, "llm_token_budget_action", "raise")) if cfg_obj is not None else "raise",
     )
 
-    request = {
-        "model": model_or_deployment,
-        "messages": messages,
-        "response_format": response_format,
-    }
-
-    # Do not pass temperature. Some GPT-5/Azure-compatible deployments only support the default.
-    resp = client.chat.completions.create(**request)
-    return json.loads(resp.choices[0].message.content)
+    content = llm.chat(
+        messages=messages,
+        temperature=0.0,
+        response_format=response_format,
+        use_top_p=False,
+    )
+    return json.loads(content)
 
 
+# -----------------------------------------------------------------------------
+# Applying accepted recommendations
 # -----------------------------------------------------------------------------
 # Applying accepted recommendations
 # -----------------------------------------------------------------------------
@@ -1772,7 +1744,10 @@ def run_stage1_qa3_verification_pipeline(
             human_df["Apply_Status"] = "Not Reviewed"
             human_df["Apply_Reason"] = "Stage1 QA3 was run in build-tasks-only mode."
     else:
-        client, model = make_openai_client_from_env_or_cfg(cfg_pipeline)
+        if cfg_pipeline is None:
+            raise RuntimeError("cfg_pipeline is required for Stage1 QA3 LLM calls.")
+        cfg_pipeline.validate_env()
+        llm = make_llm_from_config(cfg_pipeline)
         qa3_progress_start = time.perf_counter()
         total_tasks = int(tasks_df.shape[0])
 
@@ -1794,7 +1769,7 @@ def run_stage1_qa3_verification_pipeline(
             packet_path.write_text(json.dumps(packet, ensure_ascii=False, indent=2), encoding="utf-8")
 
             try:
-                rec = call_llm_review(client, model, packet, cfg_obj=cfg_pipeline)
+                rec = call_llm_review(llm, packet, cfg_obj=cfg_pipeline)
                 out_row = recommendation_to_rows(rec, task)
             except Exception as e:
                 out_row = dict(task)
@@ -1935,6 +1910,7 @@ def run_stage1_qa3_verification_pipeline(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run GEOMeta Stage 1 QA3 evidence-grounded verifier / targeted rescue")
+    parser.add_argument("--workdir", default=".", help="GEOMeta repository/work directory")
     parser.add_argument("--stage1", required=True, help="Stage1/Stage1 QA1 corrected table with GSE_Info/GSM_Info attached")
     parser.add_argument(
         "--stage1-qa1-report",
@@ -1987,6 +1963,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    cfg_pipeline = default_config(Path(args.workdir).resolve())
+    if not args.build_tasks_only and args.stage1_qa3_mode != "off":
+        cfg_pipeline.validate_env()
+
     df_stage1 = read_table(Path(args.stage1))
 
     qa3_mode = args.stage1_qa3_mode
@@ -2031,7 +2011,7 @@ def main() -> None:
         output_dir=Path(args.output_dir),
         run_version=args.run_version,
         verifier_config=cfg,
-        cfg_pipeline=None,
+        cfg_pipeline=cfg_pipeline,
     )
 
     print("Stage 1 QA3 complete.")

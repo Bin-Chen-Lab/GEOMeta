@@ -4,7 +4,24 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
 
+    if value is None:
+        return default
+
+    value = value.strip().lower()
+
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True
+
+    if value in {"0", "false", "no", "n", "off"}:
+        return False
+
+    raise ValueError(
+        f"Invalid boolean value for {name}: {value}"
+    )
+    
 @dataclass
 class Config:
     # -------------------------
@@ -52,14 +69,19 @@ class Config:
     # -------------------------
     # Generic LLM backend
     # -------------------------
-    # Default target is the direct OpenAI API, but the same interface can point
-    # to OpenAI-compatible gateways/servers such as LiteLLM, OpenRouter, vLLM,
-    # Ollama/LM Studio, Together/Fireworks-style APIs, etc.
+    # Generic OpenAI-compatible LLM backend.
+   # API key, base URL, and model should be provided explicitly through
+   # environment variables so the pipeline is not tied to any specific provider.
     llm_api_type: str = "openai_compatible"
     llm_api_key: str = ""
-    llm_base_url: str = "https://api.openai.com/v1"
-    llm_model: str = "gpt-5"
-
+    llm_base_url: str = ""
+    llm_model: str = ""
+    
+    # Model/provider capabilities
+    llm_supports_temperature: bool = True
+    llm_supports_top_p: bool = True
+    llm_supports_json_schema: bool = True
+    
     # -------------------------
     # Runtime knobs
     # -------------------------
@@ -70,8 +92,9 @@ class Config:
     term_batch_size: int = 30
     run_version: str = "gaa"
 
-    # LLM token-budget guardrails. GPT-5 has a 400k total context window and
-    # 128k max output tokens, so the practical max input budget is 272k tokens.
+    # LLM token-budget guardrails.
+    # These defaults should be adjusted when using a model with a different
+    # context-window or output-token limit.
     # GEOMeta uses a lower safe limit to leave room for provider-side accounting
     # differences and to reduce long-context extraction failures.
     llm_model_input_token_limit: int = 272000
@@ -171,15 +194,12 @@ class Config:
         #   LLM_API_KEY
         #   LLM_BASE_URL
         #   LLM_MODEL
-        #
-        # Backward/convenience aliases for direct OpenAI:
-        #   OPENAI_API_KEY
-        #   OPENAI_MODEL
+
         self.llm_api_type = os.getenv("LLM_API_TYPE", self.llm_api_type).lower().strip()
 
         self.llm_api_key = os.getenv(
             "LLM_API_KEY",
-            os.getenv("OPENAI_API_KEY", self.llm_api_key),
+             self.llm_api_key,
         ).strip()
 
         self.llm_base_url = os.getenv(
@@ -189,9 +209,24 @@ class Config:
 
         self.llm_model = os.getenv(
             "LLM_MODEL",
-            os.getenv("OPENAI_MODEL", self.llm_model),
+             self.llm_model,
         ).strip()
 
+        self.llm_supports_temperature = _env_bool(
+            "LLM_SUPPORTS_TEMPERATURE",
+            self.llm_supports_temperature,
+        )
+
+        self.llm_supports_top_p = _env_bool(
+            "LLM_SUPPORTS_TOP_P",
+            self.llm_supports_top_p,
+        )
+        
+        self.llm_supports_json_schema = _env_bool(
+            "LLM_SUPPORTS_JSON_SCHEMA",
+             self.llm_supports_json_schema,
+         )
+      
     def validate_env(self):
         """
         Validate the LLM runtime environment.
@@ -211,13 +246,13 @@ class Config:
             )
 
         if not self.llm_api_key:
-            missing.append("LLM_API_KEY or OPENAI_API_KEY")
+            missing.append("LLM_API_KEY")
 
         if not self.llm_base_url:
             missing.append("LLM_BASE_URL")
 
         if not self.llm_model:
-            missing.append("LLM_MODEL or OPENAI_MODEL")
+            missing.append("LLM_MODEL")
 
         if missing:
             raise EnvironmentError("Missing LLM env vars: " + ", ".join(missing))
@@ -379,10 +414,10 @@ def default_config(workdir: Path) -> Config:
         novel_term_dir=novel_terms,
 
         # Generic LLM defaults
-        llm_api_type="openai_compatible",
-        llm_api_key="",
-        llm_base_url="https://api.openai.com/v1",
-        llm_model="gpt-5",
+       llm_api_type="openai_compatible",
+       llm_api_key="",
+       llm_base_url="",
+       llm_model="",
 
         # Runtime defaults
         run_version="gaa",

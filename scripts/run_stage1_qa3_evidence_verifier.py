@@ -28,6 +28,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from geo_annotation_agent.config import default_config
+
 def parse_qa3_target_fields(text):
     if text is None:
         return None
@@ -107,6 +109,7 @@ def main() -> None:
     args = parser.parse_args()
 
     workdir = Path(args.workdir).resolve()
+    cfg_pipeline = default_config(workdir)
     output_dir = Path(args.output_dir).resolve() if args.output_dir else workdir / "artifacts" / "outputs"
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -126,6 +129,10 @@ def main() -> None:
         qa3_max_tasks = None
 
     qa3_target_fields = parse_qa3_target_fields(args.qa3_target_fields)
+
+    # Validate LLM configuration only when QA3 will actually make LLM calls.
+    if not args.build_tasks_only and qa3_mode != "off":
+        cfg_pipeline.validate_env()
 
     print(
         "[Stage1 QA3] Field-targeted QA3 target fields: "
@@ -158,7 +165,7 @@ def main() -> None:
         output_dir=output_dir,
         run_version=args.run_version,
         verifier_config=cfg,
-        cfg_pipeline=None,
+        cfg_pipeline=cfg_pipeline,
     )
 
     print("\nStage 1 QA3 complete.")

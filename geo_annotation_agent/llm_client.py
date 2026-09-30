@@ -12,8 +12,13 @@ class BaseLLM(ABC):
     Minimal provider-agnostic LLM interface used by GEOMeta.
 
     All pipeline stages should call only:
-        llm.chat(messages, temperature=..., max_tokens=...)
-
+         llm.chat(
+            messages,
+            temperature=...,
+            max_tokens=...,
+            response_format=...,
+        )
+        
     The backend implementation can be direct OpenAI, LiteLLM, OpenRouter,
     vLLM, Ollama-compatible server, or another OpenAI-compatible endpoint.
     """
@@ -24,6 +29,8 @@ class BaseLLM(ABC):
         messages: List[Dict[str, Any]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        use_top_p: bool = True,
     ) -> str:
         pass
 
@@ -47,29 +54,41 @@ class OpenAICompatibleLLM(BaseLLM):
     """
 
     def __init__(
-        self,
-        api_key: str,
-        model: str,
-        base_url: str = "https://api.openai.com/v1",
-        max_retries: int = 3,
-        retry_sleep_seconds: float = 2.0,
-        sleep_between_calls: float = 0.0,
-        top_p: float = 1.0,
-    ):
+         self,
+         api_key: str,
+         model: str,
+         base_url: str = "",
+         max_retries: int = 3,
+         retry_sleep_seconds: float = 2.0,
+         sleep_between_calls: float = 0.0,
+         top_p: float = 1.0,
+         supports_temperature: bool = True,
+         supports_top_p: bool = True,
+         supports_json_schema: bool = True,
+     ):
         self.api_key = str(api_key or "").strip()
         self.model = str(model or "").strip()
-        self.base_url = str(base_url or "https://api.openai.com/v1").rstrip("/")
+        self.base_url = str(base_url or "").rstrip("/")
+        if not self.base_url:
+            raise ValueError(
+                "LLM base URL is required. Set LLM_BASE_URL."
+             )
         self.max_retries = int(max_retries)
         self.retry_sleep_seconds = float(retry_sleep_seconds)
         self.sleep_between_calls = float(sleep_between_calls)
         self.top_p = float(top_p)
+         
+        self.supports_temperature = bool(supports_temperature)
+        self.supports_top_p = bool(supports_top_p)
+        
+        self.supports_json_schema = bool(
+             supports_json_schema
+         )
 
         if not self.api_key:
             raise ValueError("Missing LLM API key.")
         if not self.model:
             raise ValueError("Missing LLM model name.")
-        if not self.base_url:
-            raise ValueError("Missing LLM base URL.")
 
         self.client = OpenAI(
             api_key=self.api_key,
@@ -81,24 +100,31 @@ class OpenAICompatibleLLM(BaseLLM):
         messages: List[Dict[str, Any]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-    ) -> str:
+        response_format: Optional[Dict[str, Any]] = None,
+        use_top_p: bool = True,
+    ):
         last_err = None
-        model_name = self.model.lower()
 
         for attempt in range(1, self.max_retries + 1):
             try:
-                payload: Dict[str, Any] = {
+                payload = {
                     "model": self.model,
                     "messages": messages,
                 }
+                
+                if (
+                   response_format is not None
+                   and self.supports_json_schema
+                ):
+                   payload["response_format"] = response_format
 
-                # Conservative GPT-5 handling:
-                # Some GPT-5/reasoning endpoints may reject unsupported sampling parameters.
-                # For non-GPT-5 models, preserve existing pipeline behavior.
-                if temperature is not None and not model_name.startswith("gpt-5"):
+                if (
+                   temperature is not None
+                    and self.supports_temperature
+                ):
                     payload["temperature"] = temperature
 
-                if not model_name.startswith("gpt-5"):
+                if use_top_p and self.supports_top_p:
                     payload["top_p"] = self.top_p
 
                 if max_tokens is not None:
@@ -120,9 +146,8 @@ class OpenAICompatibleLLM(BaseLLM):
         raise RuntimeError(
             f"OpenAICompatibleLLM.chat failed after "
             f"{self.max_retries} attempts using model={self.model}, "
-            f"base_url={self.base_url}: {repr(last_err)}"
+            f"base_url={self.base_url}: {repr(last_err)}" 
         )
-
 
 def make_llm_from_config(cfg) -> BaseLLM:
     """
@@ -144,7 +169,7 @@ def make_llm_from_config(cfg) -> BaseLLM:
 
     api_type = str(getattr(cfg, "llm_api_type", "openai_compatible")).lower().strip()
 
-    if api_type not in {"openai_compatible", "openai"}:
+    if api_type != "openai_compatible":
         raise ValueError(
             f"Unsupported LLM_API_TYPE={api_type}. "
             "Currently supported: openai_compatible."
@@ -152,10 +177,28 @@ def make_llm_from_config(cfg) -> BaseLLM:
 
     return OpenAICompatibleLLM(
         api_key=getattr(cfg, "llm_api_key", ""),
-        model=getattr(cfg, "llm_model", "gpt-5"),
-        base_url=getattr(cfg, "llm_base_url", "https://api.openai.com/v1"),
+        model=getattr(cfg, "llm_model", ""),
+        base_url=getattr(cfg, "llm_base_url", ""),
         max_retries=getattr(cfg, "max_retries", 3),
         retry_sleep_seconds=getattr(cfg, "retry_sleep_seconds", 2.0),
         sleep_between_calls=getattr(cfg, "sleep_between_calls", 0.0),
         top_p=getattr(cfg, "top_p", 1.0),
+        
+       supports_temperature=getattr(
+           cfg,
+           "llm_supports_temperature",
+            True,
+        ),
+
+       supports_top_p=getattr(
+          cfg,
+           "llm_supports_top_p",
+           True,
+        ),
+        
+        supports_json_schema=getattr(
+            cfg,
+            "llm_supports_json_schema",
+             True,
+         ),
     )

@@ -15,17 +15,12 @@ Recommended use
 Run this only after within_gse_consistency_audit.py, and only for medium/ambiguous
 issues. High-confidence blank-cell fills are already handled by deterministic rules.
 
-Azure OpenAI environment variables
-----------------------------------
-AZURE_OPENAI_ENDPOINT=https://YOUR_RESOURCE.openai.azure.com/
-AZURE_OPENAI_API_KEY=...
-AZURE_OPENAI_DEPLOYMENT=gpt-5-or-your-deployment
-AZURE_OPENAI_API_VERSION=2025-04-01-preview
-
-OpenAI fallback environment variables
--------------------------------------
-OPENAI_API_KEY=...
-OPENAI_MODEL=gpt-5.1
+Generic LLM environment variables
+---------------------------------
+LLM_API_TYPE=openai_compatible
+LLM_API_KEY=...
+LLM_BASE_URL=https://YOUR_OPENAI_COMPATIBLE_ENDPOINT/v1
+LLM_MODEL=your-model-or-deployment-name
 """
 
 from __future__ import annotations
@@ -39,6 +34,8 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+from geo_annotation_agent.config import default_config
+from geo_annotation_agent.llm_client import make_llm_from_config
 from within_gse_consistency_audit import clean_value, is_missing, read_table
 
 
@@ -171,34 +168,16 @@ def build_evidence_packet(
     }
 
 
-def get_client_and_mode() -> tuple[Any, str, str]:
-    # Lazily import so users can run rule-based audit without openai installed.
-    from openai import AzureOpenAI, OpenAI
-
-    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-    azure_key = os.getenv("AZURE_OPENAI_API_KEY")
-    azure_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
-    azure_api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2025-04-01-preview")
-
-    if azure_endpoint and azure_key and azure_deployment:
-        client = AzureOpenAI(api_key=azure_key, azure_endpoint=azure_endpoint, api_version=azure_api_version)
-        return client, "azure", azure_deployment
-
-    openai_key = os.getenv("OPENAI_API_KEY")
-    model = os.getenv("OPENAI_MODEL", "gpt-5.1")
-    if openai_key:
-        client = OpenAI(api_key=openai_key)
-        return client, "openai", model
-
-    raise RuntimeError(
-        "No LLM credentials found. Set Azure OpenAI environment variables or OPENAI_API_KEY."
-    )
+def get_llm_from_config(workdir: Path):
+    """Build the shared GEOMeta LLM client from the central Config."""
+    cfg = default_config(workdir)
+    cfg.validate_env()
+    return make_llm_from_config(cfg)
 
 
-def call_llm_review(client: Any, mode: str, model_or_deployment: str, packet: Dict[str, Any], temperature: float = 0.0) -> Dict[str, Any]:
+def call_llm_review(llm: Any, packet: Dict[str, Any]) -> Dict[str, Any]:
     user_content = json.dumps(packet, ensure_ascii=False, indent=2)
 
-    # Use Chat Completions compatible shape for Azure/OpenAI SDKs.
     response_format = {
         "type": "json_schema",
         "json_schema": {
@@ -208,16 +187,15 @@ def call_llm_review(client: Any, mode: str, model_or_deployment: str, packet: Di
         },
     }
 
-    resp = client.chat.completions.create(
-        model=model_or_deployment,
+    content = llm.chat(
         messages=[
             {"role": "system", "content": REVIEW_SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
         ],
+        temperature=0.0,
         response_format=response_format,
-        temperature=temperature,
+        use_top_p=False,
     )
-    content = resp.choices[0].message.content
     return json.loads(content)
 
 
@@ -233,6 +211,7 @@ def main() -> None:
     parser.add_argument("--max-gsm-info-chars", type=int, default=1800)
     parser.add_argument("--max-samples", type=int, default=12)
     parser.add_argument("--sleep-seconds", type=float, default=0.2)
+    parser.add_argument("--workdir", default=".", help="GEOMeta repository/work directory")
     args = parser.parse_args()
 
     stage1_df = read_table(Path(args.stage1))
@@ -244,7 +223,7 @@ def main() -> None:
     )
 
     print(f"Selected {len(issues_df):,} issues for LLM review.")
-    client, mode, model_or_deployment = get_client_and_mode()
+    llm = get_llm_from_config(Path(args.workdir).resolve())
 
     rows: List[Dict[str, Any]] = []
     packets: List[Dict[str, Any]] = []
@@ -259,7 +238,7 @@ def main() -> None:
         )
         packets.append(packet)
         try:
-            decision = call_llm_review(client, mode, model_or_deployment, packet)
+            decision = call_llm_review(llm, packet)
             status = "OK"
             error = ""
         except Exception as exc:  # noqa: BLE001

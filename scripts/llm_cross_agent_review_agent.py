@@ -32,6 +32,9 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+from geo_annotation_agent.config import default_config
+from geo_annotation_agent.llm_client import make_llm_from_config
+
 # Local imports from scripts directory.
 from stage1_cross_agent_validation import clean_value, read_table
 
@@ -197,28 +200,14 @@ def build_evidence_packet(
     }
 
 
-def get_client_and_mode() -> tuple[Any, str, str]:
-    from openai import AzureOpenAI, OpenAI
-
-    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-    azure_key = os.getenv("AZURE_OPENAI_API_KEY")
-    azure_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
-    azure_api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2025-04-01-preview")
-
-    if azure_endpoint and azure_key and azure_deployment:
-        client = AzureOpenAI(api_key=azure_key, azure_endpoint=azure_endpoint, api_version=azure_api_version)
-        return client, "azure", azure_deployment
-
-    openai_key = os.getenv("OPENAI_API_KEY")
-    model = os.getenv("OPENAI_MODEL", "gpt-5.1")
-    if openai_key:
-        client = OpenAI(api_key=openai_key)
-        return client, "openai", model
-
-    raise RuntimeError("No LLM credentials found. Set Azure OpenAI variables or OPENAI_API_KEY.")
+def get_llm_from_config(workdir: Path):
+    """Build the shared GEOMeta LLM client from the central Config."""
+    cfg = default_config(workdir)
+    cfg.validate_env()
+    return make_llm_from_config(cfg)
 
 
-def call_llm_review(client: Any, model_or_deployment: str, packet: Dict[str, Any], temperature: float = 0.0) -> Dict[str, Any]:
+def call_llm_review(llm: Any, packet: Dict[str, Any]) -> Dict[str, Any]:
     response_format = {
         "type": "json_schema",
         "json_schema": {
@@ -228,16 +217,16 @@ def call_llm_review(client: Any, model_or_deployment: str, packet: Dict[str, Any
         },
     }
 
-    resp = client.chat.completions.create(
-        model=model_or_deployment,
+    content = llm.chat(
         messages=[
             {"role": "system", "content": REVIEW_SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(packet, ensure_ascii=False, indent=2)},
         ],
+        temperature=0.0,
         response_format=response_format,
-        temperature=temperature,
+        use_top_p=False,
     )
-    return json.loads(resp.choices[0].message.content)
+    return json.loads(content)
 
 
 def main() -> None:
@@ -255,6 +244,7 @@ def main() -> None:
     parser.add_argument("--max-gsm-info-chars", type=int, default=2200)
     parser.add_argument("--max-same-gse-examples", type=int, default=12)
     parser.add_argument("--sleep-seconds", type=float, default=0.2)
+    parser.add_argument("--workdir", default=".", help="GEOMeta repository/work directory")
     args = parser.parse_args()
 
     stage1_df = read_table(Path(args.stage1))
@@ -269,7 +259,7 @@ def main() -> None:
     )
 
     print(f"Selected {len(selected):,} cross-agent issues for LLM review.")
-    client, _mode, model_or_deployment = get_client_and_mode()
+    llm = get_llm_from_config(Path(args.workdir).resolve())
 
     rows: List[Dict[str, Any]] = []
     packet_rows: List[Dict[str, Any]] = []
@@ -285,7 +275,7 @@ def main() -> None:
             max_same_gse_examples=args.max_same_gse_examples,
         )
         try:
-            decision = call_llm_review(client, model_or_deployment, packet)
+            decision = call_llm_review(llm, packet)
             status = "OK"
             error = ""
         except Exception as exc:  # noqa: BLE001
