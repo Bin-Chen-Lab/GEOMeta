@@ -116,14 +116,12 @@ GEOMeta uses an **OpenAI-compatible Chat Completions interface**. The backend is
 
 ### Direct OpenAI API
 
-The current GEOMeta configuration defaults to the direct OpenAI endpoint and `gpt-5`.
+To use the direct OpenAI API, configure:
 
-```bash
 export LLM_API_TYPE="openai_compatible"
 export LLM_BASE_URL="https://api.openai.com/v1"
 export LLM_API_KEY="your_openai_api_key"
 export LLM_MODEL="gpt-5"
-```
 
 Users may replace `gpt-5` with another OpenAI model that supports Chat Completions. Model availability and model names can change over time.
 
